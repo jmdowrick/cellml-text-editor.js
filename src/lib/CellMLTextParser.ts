@@ -10,6 +10,7 @@ export interface ParserOptions {
    * @default "data-source-location"
    */
   sourceLineAttribute?: string | null
+  simplified?: boolean | false
 }
 
 export interface ParserError {
@@ -26,11 +27,13 @@ export class CellMLTextParser {
   private scanner!: CellMLTextScanner
   private doc!: XMLDocument
   private sourceLineAttr: string | null
+  private simplified: boolean 
 
   constructor(options: ParserOptions = {}) {
     // Default to 'data-source-location' if undefined, but allow null to disable
     this.sourceLineAttr =
       options.sourceLineAttribute === undefined ? 'data-source-location' : options.sourceLineAttribute
+    this.simplified = options.simplified ?? true
   }
 
   public parse(text: string): ParserResult {
@@ -39,37 +42,80 @@ export class CellMLTextParser {
 
     try {
       const root = this.doc.documentElement
-      // The createDocument call sets the namespace on the root, but we need to ensure attributes are handled
 
-      // Expect: def model <name> as
-      this.expect(TokenType.KwDef)
-      this.expect(TokenType.KwModel)
+      if (this.simplified && this.scanner.token !== TokenType.KwDef) {
+        root.setAttribute('name', 'implicit_model')
 
-      if (this.scanner.token === TokenType.Identifier) {
-        root.setAttribute('name', this.scanner.value)
-        this.scanner.nextToken()
-      }
+        let defaultComp = this.doc.createElementNS(CELLML_NS, 'component')
+        defaultComp.setAttribute('name', 'default_component')
 
-      this.expect(TokenType.KwAs)
+        while (this.scanner.token !== TokenType.EOF) {
+          if (this.scanner.token === TokenType.KwComp) {
+            this.parseSimpleComponentBlock(root)
+          } 
+          // Handle naked declarations (single component models)
+          else if (this.scanner.token === TokenType.KwVar) {
+            if (!defaultComp.parentElement) root.appendChild(defaultComp)
+            this.parseVariable(defaultComp)
+          } else if (this.scanner.token === TokenType.Identifier || this.scanner.token === TokenType.KwSel) {
+            if (!defaultComp.parentElement) root.appendChild(defaultComp)
+            this.parseMathEquation(defaultComp)
+          } else {
+            this.scanner.nextToken()
+          }
+        }
+      } else {
+        // Expect: def model <name> as
+        this.expect(TokenType.KwDef)
+        this.expect(TokenType.KwModel)
 
-      while (this.scanner.token !== TokenType.KwEndDef && this.scanner.token !== TokenType.EOF) {
-        if (this.scanner.token === TokenType.KwDef) {
-          // Check lookahead for 'comp' or 'unit'
-          // We are already at 'def', so we parse based on context
-          this.parseBlock(root)
-        } else {
-          // Unexpected, consume to avoid infinite loop
+        if (this.scanner.token === TokenType.Identifier) {
+          root.setAttribute('name', this.scanner.value)
           this.scanner.nextToken()
         }
+
+        this.expect(TokenType.KwAs)
+
+        while (this.scanner.token !== TokenType.KwEndDef && this.scanner.token !== TokenType.EOF) {
+          if (this.scanner.token === TokenType.KwDef) {
+            // Check lookahead for 'comp' or 'unit'
+            // We are already at 'def', so we parse based on context
+            this.parseBlock(root)
+          } else {
+            // Unexpected, consume to avoid infinite loop
+            this.scanner.nextToken()
+          }
+        }
+
+        this.expect(TokenType.KwEndDef) // enddef
+        this.expect(TokenType.SemiColon) // ; (optional in some grammars, but strict in C++)
       }
-
-      this.expect(TokenType.KwEndDef) // enddef
-      this.expect(TokenType.SemiColon) // ; (optional in some grammars, but strict in C++)
-
       return { xml: '<?xml version="1.0" encoding="UTF-8"?>\n' + this.serialize(root), errors: [] }
     } catch (e: any) {
       return { xml: null, errors: [{ line: this.scanner.getLine(), message: e.message || 'Unknown parsing error' }] }
     }
+  }
+
+  private parseSimpleComponentBlock(parent: Element) {
+    this.expect(TokenType.KwComp)
+    const name = this.expectValue(TokenType.Identifier)
+    this.expect(TokenType.LBrace) // Expect {
+
+    const comp = this.doc.createElementNS(CELLML_NS, 'component')
+    comp.setAttribute('name', name)
+    parent.appendChild(comp)
+
+    while (this.scanner.token !== TokenType.RBrace && this.scanner.token !== TokenType.EOF) {
+      if (this.scanner.token === TokenType.KwVar) {
+        this.parseVariable(comp)
+      } else if (this.scanner.token === TokenType.Identifier || this.scanner.token === TokenType.KwSel) {
+        this.parseMathEquation(comp)
+      } else {
+        this.scanner.nextToken()
+      }
+    }
+
+    this.expect(TokenType.RBrace) // Consume }
   }
 
   private parseBlock(parent: Element) {
@@ -120,13 +166,14 @@ export class CellMLTextParser {
     variable.setAttribute('name', name)
     variable.setAttribute('units', units)
 
-    // Properties { ... }
+    let hasInterface = false
+
     if ((this.scanner.token as TokenType) === TokenType.LBrace) {
-      this.scanner.nextToken() // eat {
+      this.scanner.nextToken()
       while ((this.scanner.token as TokenType) !== TokenType.RBrace && this.scanner.token !== TokenType.EOF) {
         const prop = this.expectValue(TokenType.Identifier)
         this.expect(TokenType.Colon)
-        // Value can be identifier (public) or Number (-65)
+
         let val = ''
         if ((this.scanner.token as TokenType) === TokenType.OpMinus) {
           this.scanner.nextToken()
@@ -137,13 +184,20 @@ export class CellMLTextParser {
           val = this.expectValue(TokenType.Identifier)
         }
 
-        // Mapping
         if (prop === 'init') variable.setAttribute('initial_value', val)
-        else if (prop === 'interface') variable.setAttribute('interface', val) // simplified
+        else if (prop === 'interface') {
+          variable.setAttribute('interface', val)
+          hasInterface = true
+        }
 
         if ((this.scanner.token as TokenType) === TokenType.OpComma) this.scanner.nextToken()
       }
-      this.expect(TokenType.RBrace) // eat }
+      this.expect(TokenType.RBrace)
+    }
+
+    // Guaranteed interface="public" attribute in XML DOM
+    if (!hasInterface) {
+      variable.setAttribute('interface', 'public')
     }
 
     this.expect(TokenType.SemiColon)
