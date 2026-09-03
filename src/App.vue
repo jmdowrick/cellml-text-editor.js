@@ -125,21 +125,25 @@
 
 <script setup lang="ts">
 // @ts-ignore
-import { inject, nextTick, onMounted, ref, watch, computed } from 'vue'
+import { inject, onMounted, ref, watch, computed } from 'vue'
 import { Codemirror } from 'vue-codemirror'
 import { sublime } from '@uiw/codemirror-theme-sublime'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 
 import { CellMLTextGenerator } from './lib/CellMLTextGenerator'
-import { CellMLTextParser, type ParserError, type ExternalVarMetadata } from './lib/CellMLTextParser'
+import { CellMLTextParser, type ParserError } from './lib/CellMLTextParser'
 import { CellMLLatexGenerator } from './lib/CellMLLatexGenerator'
 import { cellml } from './lib/CellMLLanguage'
-import { 
-  analyzeComponentVariables, 
-  applyResolvedVariables,
-  MockVariableResolver,
-  buildResolutionRequest,
+import {
+  buildComponentGroups,
+  resolveManagedVariables,
+  getVariableKey as getVarKey,
+  type ComponentGroup,
+  type VariableInterface,
+  type VariableResolver,
+  type VariableResolutionRequest,
+  type VariableResolutionResult,
 } from './lib/CellMLVariableResolution'
 
 // @ts-ignore
@@ -287,15 +291,12 @@ const testXmlInput03 = `
 
 const textOutput = ref('')
 
-const generator = new CellMLTextGenerator()
 const parser = new CellMLTextParser()
 const latexGen = new CellMLLatexGenerator()
-const resolver = new MockVariableResolver()
 
 const isUpdatingFromXml = ref(false)
 let debouncer: any = null
 const cursorLine = ref(1)
-const latexPreview = ref('')
 const latexContainer = ref<HTMLElement | null>(null)
 let currentDoc: Document | null = null
 const errors = ref<ParserError[]>([])
@@ -303,92 +304,65 @@ const errors = ref<ParserError[]>([])
 // Reactive State for External Management
 const componentGroups = ref<ComponentGroup[]>([])
 const requiredVariables = ref<string[]>([])
-const stateVars = ref<string[]>([])
-const unitDeclarations = ref<Record<string, string>>({})
 const initialDeclarations = ref<Record<string, string>>({})
 const interfaceDeclarations = ref<Record<string, string>>({})
 
-const getVarKey = (comp: string, v: string) => `${comp}:${v}`
+const liveResolver: VariableResolver = {
+  async resolveVariables(request: VariableResolutionRequest): Promise<VariableResolutionResult> {
+    const resolved: VariableResolutionResult['resolved'] = []
+    const unresolved: string[] = []
 
-export interface VariableRef {
-  componentName: string
-  variableName: string
-}
+    for (const name of request.variableNames) {
+      const key = getVarKey(request.componentName, name)
+      const units = variableUnits.value[key]
 
-function getExternalVariable(compName: string, varName: string): ExternalVarMetadata | undefined {
-  const key = getVarKey(compName, varName)
-  return {
-    units: variableUnits.value[key] || 'dimensionless',
-    initialValue: initialDeclarations.value[key] || undefined,
-    interface: interfaceDeclarations.value[key] || 'public',
-  }
+      if (!units?.trim()) {
+        unresolved.push(name)
+        continue
+      }
+
+      resolved.push({
+        name,
+        units,
+        initialValue: initialDeclarations.value[key] || undefined,
+        interface: (interfaceDeclarations.value[key] as VariableInterface) || 'public',
+      })
+    }
+
+    return { resolved, unresolved }
+  },
 }
 
 const hasValidUnits = computed(() => {
-  return requiredVariables.value.every(v => !!variableUnits.value[v]?.trim())
+  return requiredVariables.value.every((v) => !!variableUnits.value[v]?.trim())
 })
-
-export interface ComponentGroup {
-  componentName: string
-  variables: string[]
-  stateVariables: string[]
-  initialVariables: string[]
-}
 
 const updateVariableAnalysis = () => {
   if (!currentDoc) return
 
-  const components = Array.from(currentDoc.getElementsByTagName('component'))
-  const groups: ComponentGroup[] = []
-  const reqVars: string[] = []
-  
-  const mergedUnits = { ...variableUnits.value }
+  const { groups, requiredVariables: reqVars, existingUnits } = buildComponentGroups(currentDoc)
 
-  components.forEach((comp) => {
-    const compName = comp.getAttribute('name') || 'implicit_component'
-    const analysis = analyzeComponentVariables(comp)
-
-    const varNodes = Array.from(comp.getElementsByTagName('variable'))
-    varNodes.forEach((node) => {
-      const varName = node.getAttribute('name')
-      const existingUnit = node.getAttribute('units')
-      
-      if (varName && existingUnit) {
-        const key = getVarKey(compName, varName)
-        if (!mergedUnits[key]) {
-          mergedUnits[key] = existingUnit
-        }
-      }
-    })
-
-    groups.push({
-      componentName: compName,
-      variables: analysis.variables.slice().sort(),
-      stateVariables: analysis.stateVariables,
-      initialVariables: analysis.initialVariables || [],
-    })
-
-    analysis.required.forEach((varName) => {
-      reqVars.push(getVarKey(compName, varName))
-    })
-  })
-
-  variableUnits.value = mergedUnits
+  // Units already present in the XML seed the inputs; anything the user has already typed wins.
+  variableUnits.value = { ...existingUnits, ...variableUnits.value }
   componentGroups.value = groups
   requiredVariables.value = reqVars
 }
 
-function applyDeclarations() {
-  const currentParser = new CellMLTextParser({
-    simplified: isSimplified.value,
-    managed: isManaged.value,
-    getExternalVariable,
-  })
-  
+async function applyDeclarations() {
+  const currentParser = new CellMLTextParser({ simplified: isSimplified.value })
+
   const result = currentParser.parse(textOutput.value)
   if (result.errors.length === 0 && result.xml) {
-    xmlInput.value = result.xml
-    currentDoc = currentParser['doc']
+    currentDoc = currentParser.doc
+
+    if (isManaged.value) {
+      await resolveManagedVariables(currentDoc, liveResolver)
+      xmlInput.value =
+        '<?xml version="1.0" encoding="UTF-8"?>\n' + currentParser.serialize(currentDoc.documentElement)
+    } else {
+      xmlInput.value = result.xml
+    }
+
     updateVariableAnalysis()
   }
 }
@@ -465,18 +439,21 @@ watch(
     if (debouncer) clearTimeout(debouncer)
     debouncer = setTimeout(async () => {
       try {
-        const currentParser = new CellMLTextParser({
-          simplified: isSimplified.value,
-          managed: isManaged.value,
-          getExternalVariable,
-        })
-
+        const currentParser = new CellMLTextParser({ simplified: isSimplified.value })
         const result = currentParser.parse(newVal)
 
         if (result.errors.length === 0 && result.xml) {
           isUpdatingFromXml.value = true
-          xmlInput.value = result.xml
-          currentDoc = currentParser['doc']
+          currentDoc = currentParser.doc
+
+          if (isManaged.value) {
+            await resolveManagedVariables(currentDoc, liveResolver)
+            xmlInput.value =
+              '<?xml version="1.0" encoding="UTF-8"?>\n' + currentParser.serialize(currentDoc.documentElement)
+          } else {
+            xmlInput.value = result.xml
+          }
+
           updateVariableAnalysis()
 
           setTimeout(() => (isUpdatingFromXml.value = false), 50)
@@ -513,7 +490,7 @@ onMounted(async () => {
   xmlInput.value = updateCellMLModel(cellMLModelString)
   // xmlInput.value = testXmlInput03
   parser.parse(textOutput.value)
-  currentDoc = parser['doc']
+  currentDoc = parser.doc
   updateVariableAnalysis()
 })
 </script>

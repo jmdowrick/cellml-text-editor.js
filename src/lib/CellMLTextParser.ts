@@ -1,5 +1,4 @@
 import { CellMLTextScanner, TokenType } from './CellMLTextScanner'
-import { analyzeComponentVariables } from './CellMLVariableResolution'
 
 const CELLML_NS = 'http://www.cellml.org/cellml/2.0#'
 const MATHML_NS = 'http://www.w3.org/1998/Math/MathML'
@@ -7,14 +6,6 @@ const MATHML_NS = 'http://www.w3.org/1998/Math/MathML'
 export interface ParserOptions {
   sourceLineAttribute?: string | null
   simplified?: boolean | false
-  managed?: boolean | false
-  getExternalVariable?: (componentName: string, variableName: string) => ExternalVarMetadata | undefined
-}
-
-export interface ExternalVarMetadata {
-  units?: string
-  initialValue?: string
-  interface?: string
 }
 
 export interface ParserError {
@@ -29,23 +20,24 @@ export interface ParserResult {
 
 export class CellMLTextParser {
   private scanner!: CellMLTextScanner
-  private doc!: XMLDocument
+  private _doc!: XMLDocument
   private sourceLineAttr: string | null
   private simplified: boolean
-  private managed: boolean
-  private getExternalVariable?: (compName: string, varName: string) => ExternalVarMetadata | undefined
 
   constructor(options: ParserOptions = {}) {
     this.sourceLineAttr =
       options.sourceLineAttribute === undefined ? 'data-source-location' : options.sourceLineAttribute
     this.simplified = options.simplified ?? false
-    this.managed = options.managed ?? false
-    this.getExternalVariable = options.getExternalVariable
+  }
+
+  /** The XML document built by the most recent parse() call. Useful for feeding into resolveManagedVariables(). */
+  public get doc(): XMLDocument {
+    return this._doc
   }
 
   public parse(text: string): ParserResult {
     this.scanner = new CellMLTextScanner(text)
-    this.doc = document.implementation.createDocument(CELLML_NS, 'model', null)
+    this._doc = document.implementation.createDocument(CELLML_NS, 'model', null)
 
     try {
       const root = this.doc.documentElement
@@ -98,64 +90,11 @@ export class CellMLTextParser {
         this.expect(TokenType.SemiColon)
       }
 
-      // If running in managed mode, retrieve external variables and inject them into XML
-      if (this.managed) {
-        this.injectManagedVariables(root)
-      }
-
       return { xml: '<?xml version="1.0" encoding="UTF-8"?>\n' + this.serialize(root), errors: [] }
     } catch (e: any) {
       return { xml: null, errors: [{ line: this.scanner.getLine(), message: e.message || 'Unknown parsing error' }] }
     }
   }
-
-  /**
-   * Scans parsed components and queries external management for referenced variables
-   */
-  private injectManagedVariables(root: Element) {
-  const components = Array.from(root.getElementsByTagName('component'))
-
-  components.forEach((comp) => {
-    const compName = comp.getAttribute('name') || 'implicit_component'
-    const analysis = analyzeComponentVariables(comp)
-
-    // Variables present in math + any explicitly declared
-    const requiredVars = new Set<string>([...analysis.variables, ...analysis.declared])
-
-    const existingVarEls = Array.from(comp.getElementsByTagName('variable'))
-    const existingVarMap = new Map(existingVarEls.map((v) => [v.getAttribute('name'), v]))
-
-    const mathEl = comp.getElementsByTagNameNS(MATHML_NS, 'math')[0]
-
-    requiredVars.forEach((vName) => {
-      const extMeta = this.getExternalVariable ? this.getExternalVariable(compName, vName) : undefined
-      let varEl = existingVarMap.get(vName)
-
-      if (!varEl) {
-        varEl = this.doc.createElementNS(CELLML_NS, 'variable')
-        varEl.setAttribute('name', vName)
-        if (mathEl) {
-          comp.insertBefore(varEl, mathEl)
-        } else {
-          comp.appendChild(varEl)
-        }
-      }
-
-      varEl.setAttribute('units', extMeta?.units || 'dimensionless')
-      
-      if (extMeta?.initialValue) {
-        varEl.setAttribute('initial_value', extMeta.initialValue)
-      } else {
-        varEl.removeAttribute('initial_value')
-      }
-
-      if (extMeta?.interface) {
-        varEl.setAttribute('interface', extMeta.interface)
-      }
-    })
-  })
-}
-
 
   private parseSimpleComponentBlock(parent: Element) {
     this.expect(TokenType.KwComp)
@@ -694,7 +633,13 @@ export class CellMLTextParser {
     return null
   }
 
-  private serialize(node: Element, level: number = 0): string {
+  /**
+   * Serializes a node back to CellML-flavoured XML text using this parser's formatting rules
+   * (indentation, namespace handling, source-location stripping). Public so callers can
+   * re-serialize after mutating the document externally — e.g. after resolveManagedVariables()
+   * writes resolved variables onto the DOM.
+   */
+  public serialize(node: Element, level: number = 0): string {
     const indent = '  '.repeat(level)
     const tagName = node.tagName
     const localName = node.localName
