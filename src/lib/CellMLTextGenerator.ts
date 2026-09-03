@@ -208,7 +208,7 @@ export class CellMLTextGenerator {
       // Extract the cellml:units attribute
       const units = node.getAttributeNS(CELLML_2_0_NS, 'units')
 
-      return units ? `${value} {units: ${units}}` : value
+      return units ? `${value} {${units}}` : value
     } else if (tag === 'piecewise') {
       return this.parsePiecewise(node)
     } else if (tag === 'pi') {
