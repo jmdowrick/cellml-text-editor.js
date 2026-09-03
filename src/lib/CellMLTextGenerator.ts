@@ -3,6 +3,7 @@ const CELLML_2_0_NS = 'http://www.cellml.org/cellml/2.0#'
 export interface CellMLTextGeneratorOptions {
   tabSize?: number | 2
   simplified?: boolean | false
+  managed?: boolean | false
 }
 
 export class CellMLTextGenerator {
@@ -11,11 +12,13 @@ export class CellMLTextGenerator {
   private domParser: DOMParser
   private standardIndent: string = '  '
   private simplified: boolean = false
+  private managed: boolean = false
 
   constructor(options: CellMLTextGeneratorOptions = {}) {
     if (options.tabSize) {
       this.standardIndent = ' '.repeat(options.tabSize)
     }
+    this.managed = options.managed ?? false
     this.simplified = options.simplified ?? true
     this.domParser = new DOMParser()
   }
@@ -116,32 +119,30 @@ export class CellMLTextGenerator {
     if (!this.simplified) {
       this.append(`def comp ${name} as`)
       this.indentLevel++
+      // Advanced view: display variable declarations
+      const vars = component?.getElementsByTagName('variable') || []
+      for (let i = 0; i < vars.length; i++) {
+        this.processVariable(vars[i])
+      }
     } else {
       this.append(`comp ${name} {`)
       this.indentLevel++
+      // Simple view: Hide variable declarations if managed
+      if (!this.managed) {
+        const vars = component?.getElementsByTagName('variable') || []
+        for (let i = 0; i < vars.length; i++) {
+          this.processVariable(vars[i])
+        }
+      }
     }
 
-    // Variables.
-    const vars = component?.getElementsByTagName('variable') || []
-    for (let i = 0; i < vars.length; i++) {
-      this.processVariable(vars[i])
-    }
-
-    // Math.
     const maths = component?.getElementsByTagNameNS('http://www.w3.org/1998/Math/MathML', 'math') || []
     for (let i = 0; i < maths.length; i++) {
       this.processMath(maths[i])
     }
 
-    if (!this.simplified) {
-      this.indentLevel--
-      this.append(`enddef;`)
-      this.append('') // Spacer
-    } else {
-      this.indentLevel--
-      this.append(`}`)
-      this.append('')
-    }
+    this.indentLevel--
+    this.append(this.simplified ? '}\n' : 'enddef;\n')
   }
 
   private processVariable(v: Element | null | undefined) {

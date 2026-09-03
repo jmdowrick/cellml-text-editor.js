@@ -1,16 +1,20 @@
 import { CellMLTextScanner, TokenType } from './CellMLTextScanner'
+import { analyzeComponentVariables } from './CellMLVariableResolution'
 
 const CELLML_NS = 'http://www.cellml.org/cellml/2.0#'
 const MATHML_NS = 'http://www.w3.org/1998/Math/MathML'
 
 export interface ParserOptions {
-  /**
-   * The attribute name used to tag MathML elements with their source line number.
-   * Set to null or empty string to disable source tracking in the DOM entirely.
-   * @default "data-source-location"
-   */
   sourceLineAttribute?: string | null
   simplified?: boolean | false
+  managed?: boolean | false
+  getExternalVariable?: (componentName: string, variableName: string) => ExternalVarMetadata | undefined
+}
+
+export interface ExternalVarMetadata {
+  units?: string
+  initialValue?: string
+  interface?: string
 }
 
 export interface ParserError {
@@ -28,11 +32,15 @@ export class CellMLTextParser {
   private doc!: XMLDocument
   private sourceLineAttr: string | null
   private simplified: boolean
+  private managed: boolean
+  private getExternalVariable?: (compName: string, varName: string) => ExternalVarMetadata | undefined
 
   constructor(options: ParserOptions = {}) {
     this.sourceLineAttr =
       options.sourceLineAttribute === undefined ? 'data-source-location' : options.sourceLineAttribute
-    this.simplified = options.simplified ?? true
+    this.simplified = options.simplified ?? false
+    this.managed = options.managed ?? false
+    this.getExternalVariable = options.getExternalVariable
   }
 
   public parse(text: string): ParserResult {
@@ -86,18 +94,73 @@ export class CellMLTextParser {
           }
         }
 
-        this.expect(TokenType.KwEndDef) // enddef
-        this.expect(TokenType.SemiColon) // ; (optional in some grammars, but strict in C++)
+        this.expect(TokenType.KwEndDef)
+        this.expect(TokenType.SemiColon)
       }
+
+      // If running in managed mode, retrieve external variables and inject them into XML
+      if (this.managed) {
+        this.injectManagedVariables(root)
+      }
+
       return { xml: '<?xml version="1.0" encoding="UTF-8"?>\n' + this.serialize(root), errors: [] }
     } catch (e: any) {
       return { xml: null, errors: [{ line: this.scanner.getLine(), message: e.message || 'Unknown parsing error' }] }
     }
   }
 
+  /**
+   * Scans parsed components and queries external management for referenced variables
+   */
+  private injectManagedVariables(root: Element) {
+  const components = Array.from(root.getElementsByTagName('component'))
+
+  components.forEach((comp) => {
+    const compName = comp.getAttribute('name') || 'implicit_component'
+    const analysis = analyzeComponentVariables(comp)
+
+    // Variables present in math + any explicitly declared
+    const requiredVars = new Set<string>([...analysis.variables, ...analysis.declared])
+
+    const existingVarEls = Array.from(comp.getElementsByTagName('variable'))
+    const existingVarMap = new Map(existingVarEls.map((v) => [v.getAttribute('name'), v]))
+
+    const mathEl = comp.getElementsByTagNameNS(MATHML_NS, 'math')[0]
+
+    requiredVars.forEach((vName) => {
+      const extMeta = this.getExternalVariable ? this.getExternalVariable(compName, vName) : undefined
+      let varEl = existingVarMap.get(vName)
+
+      if (!varEl) {
+        varEl = this.doc.createElementNS(CELLML_NS, 'variable')
+        varEl.setAttribute('name', vName)
+        if (mathEl) {
+          comp.insertBefore(varEl, mathEl)
+        } else {
+          comp.appendChild(varEl)
+        }
+      }
+
+      varEl.setAttribute('units', extMeta?.units || 'dimensionless')
+      
+      if (extMeta?.initialValue) {
+        varEl.setAttribute('initial_value', extMeta.initialValue)
+      } else {
+        varEl.removeAttribute('initial_value')
+      }
+
+      if (extMeta?.interface) {
+        varEl.setAttribute('interface', extMeta.interface)
+      }
+    })
+  })
+}
+
+
   private parseSimpleComponentBlock(parent: Element) {
     this.expect(TokenType.KwComp)
     const name = this.expectValue(TokenType.Identifier)
+
     this.expect(TokenType.LBrace) // Expect {
 
     const comp = this.doc.createElementNS(CELLML_NS, 'component')

@@ -1,13 +1,13 @@
-// Support for "externally managed" simplified-mode components
-
 const MATHML_NS = 'http://www.w3.org/1998/Math/MathML'
 const CELLML_2_0_NS = 'http://www.cellml.org/cellml/2.0#'
 
+// --- Analysis: what does a component's math actually need? ---------------
+
 export interface ComponentVariableAnalysis {
-  referenced: string[]
-  declared: string[]
-  required: string[]
-  stateVariables: string[]
+  variables: string[]       // All variables referenced in the math
+  declared: string[]        // All variables already declared in the component
+  required: string[]        // Variables referenced in the math but not declared in the component
+  stateVariables: string[]  // Variables that are dependent on a companion variable (i.e., appear in a <diff> element)
 }
 
 export function analyzeComponentVariables(component: Element): ComponentVariableAnalysis {
@@ -29,7 +29,7 @@ export function analyzeComponentVariables(component: Element): ComponentVariable
   const required = Array.from(referenced).filter((name) => !declared.has(name))
 
   return {
-    referenced: Array.from(referenced),
+    variables: Array.from(referenced),
     declared: Array.from(declared),
     required,
     stateVariables: Array.from(stateVariables),
@@ -77,7 +77,6 @@ export interface VariableResolutionRequest {
 
 export interface VariableResolutionResult {
   resolved: ExternalVariableInfo[]
-  /** Requested names the external program had no information for. */
   unresolved: string[]
 }
 
@@ -141,12 +140,12 @@ export function buildResolutionRequest(
   componentName: string,
   analysis: ComponentVariableAnalysis,
 ): VariableResolutionRequest {
-  const requiredSet = new Set(analysis.required)
+  const variableSet = new Set(analysis.required)
   return {
     modelName,
     componentName,
-    variableNames: analysis.required,
-    stateVariableNames: analysis.stateVariables.filter((name) => requiredSet.has(name)),
+    variableNames: analysis.variables,
+    stateVariableNames: analysis.stateVariables,
   }
 }
 

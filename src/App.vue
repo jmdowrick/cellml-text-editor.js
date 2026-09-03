@@ -1,6 +1,17 @@
 <template>
   <div class="container">
     <div class="panel">
+      <!-- Top Bar: Mode Toggle -->
+      <div class="toolbar">
+        <label class="toggle-label">
+          <input 
+            type="checkbox" 
+            v-model="isManaged" 
+          />
+          <strong>External Variable Management</strong>
+        </label>
+      </div>
+
       <div v-if="errors.length > 0" class="error-banner">
         <div v-for="(err, index) in errors" :key="index">
           <strong>Line {{ err.line }}:</strong> {{ err.message }}
@@ -8,7 +19,8 @@
       </div>
       <div v-else class="preview-pane" ref="latexContainer"></div>
 
-      <div class="panel">
+      <div class="editor-layout">
+        <div class="panel">
         <div class="header-row">
           <h3>CellML Text</h3>
           <label class="toggle-label">
@@ -27,6 +39,79 @@
           @update="handleStateUpdate"
         >
         </codemirror>
+        </div>
+
+        <!-- External Variable Management Pane -->
+        <div v-if="isManaged" class="panel variable-pane">
+          <h3>All Referenced Variables</h3>
+          
+          <div class="variable-list">
+            <div 
+              v-for="group in componentGroups" 
+              :key="group.componentName" 
+              class="component-group"
+            >
+              <div class="component-title">
+                Component: <span>{{ group.componentName }}</span>
+              </div>
+
+              <div 
+                v-for="varName in group.variables" 
+                :key="varName" 
+                class="variable-row"
+              >
+                <div class="var-header">
+                  <span class="var-name">{{ varName }}</span>
+                  
+                  <!-- Metadata Role Badges -->
+                  <div class="badge-group">
+                    <span v-if="group.stateVariables.includes(varName)" class="badge badge-state">
+                      ODE State
+                    </span>
+                    <span v-if="group.initialVariables.includes(varName)" class="badge badge-init">
+                      Initializer
+                    </span>
+                    <span 
+                      v-if="!group.stateVariables.includes(varName) && !group.initialVariables.includes(varName)" 
+                      class="badge badge-ref"
+                    >
+                      External Ref
+                    </span>
+                  </div>
+                </div>
+                
+                <div class="var-inputs">
+                  <label>
+                    Units:
+                    <input 
+                      type="text" 
+                      v-model="unitDeclarations[getVarKey(group.componentName, varName)]" 
+                      placeholder="e.g. millivolt, second"
+                    />
+                  </label>
+
+                  <!-- Show companion input if variable requires an initial value declaration -->
+                  <label v-if="group.stateVariables.includes(varName)">
+                    Initial Value Companion:
+                    <input 
+                      type="text" 
+                      v-model="initialDeclarations[getVarKey(group.componentName, varName)]" 
+                      placeholder="e.g. V_init"
+                    />
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <button 
+              class="btn-apply" 
+              @click="applyDeclarations"
+              :disabled="!hasValidUnits"
+            >
+              Apply Unit Declarations
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -39,17 +124,22 @@
 
 <script setup lang="ts">
 // @ts-ignore
-import { inject, nextTick, onMounted, ref, watch } from 'vue'
-import { basicSetup } from 'codemirror'
+import { inject, nextTick, onMounted, ref, watch, computed } from 'vue'
 import { Codemirror } from 'vue-codemirror'
 import { sublime } from '@uiw/codemirror-theme-sublime'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 
 import { CellMLTextGenerator } from './lib/CellMLTextGenerator'
-import { CellMLTextParser, type ParserError } from './lib/CellMLTextParser'
+import { CellMLTextParser, type ParserError, type ExternalVarMetadata } from './lib/CellMLTextParser'
 import { CellMLLatexGenerator } from './lib/CellMLLatexGenerator'
 import { cellml } from './lib/CellMLLanguage'
+import { 
+  analyzeComponentVariables, 
+  applyResolvedVariables,
+  MockVariableResolver,
+  buildResolutionRequest,
+} from './lib/CellMLVariableResolution'
 
 // @ts-ignore
 import { initLibCellML, updateCellMLModel } from './utils/cellml'
@@ -64,6 +154,7 @@ const cellmlModules = import.meta.glob('./assets/cellml/*.cellml', {
 const extensions = [sublime, cellml()]
 
 const isSimplified = ref(false)
+const isManaged = ref(false)
 
 // Sample CellML 2.0 XML to start with
 const xmlInput = ref(`<?xml version="1.0" encoding="UTF-8"?>
@@ -76,7 +167,7 @@ const xmlInput = ref(`<?xml version="1.0" encoding="UTF-8"?>
         <apply><diff/><bvar><ci>t</ci></bvar><ci>V</ci></apply>
         <apply><plus/>
            <ci>V</ci>
-           <cn cellml:units="dimensionless">10</cn>
+           <ci>i_Ion</ci>
         </apply>
       </apply>
     </math>
@@ -197,6 +288,7 @@ const textOutput = ref('')
 const generator = new CellMLTextGenerator()
 const parser = new CellMLTextParser()
 const latexGen = new CellMLLatexGenerator()
+const resolver = new MockVariableResolver()
 
 const isUpdatingFromXml = ref(false)
 let debouncer: any = null
@@ -205,6 +297,89 @@ const latexPreview = ref('')
 const latexContainer = ref<HTMLElement | null>(null)
 let currentDoc: Document | null = null
 const errors = ref<ParserError[]>([])
+
+// Reactive State for External Management
+const componentGroups = ref<ComponentGroup[]>([])
+const requiredVariables = ref<string[]>([])
+const stateVars = ref<string[]>([])
+const unitDeclarations = ref<Record<string, string>>({})
+const initialDeclarations = ref<Record<string, string>>({})
+const interfaceDeclarations = ref<Record<string, string>>({})
+
+const getVarKey = (comp: string, v: string) => `${comp}:${v}`
+
+export interface VariableRef {
+  componentName: string
+  variableName: string
+}
+
+const analyzedExternalVars = ref<VariableRef[]>([])
+const analyzedStateVars = ref<VariableRef[]>([])
+const analyzedInitialVars = ref<VariableRef[]>([])
+
+function getExternalVariable(compName: string, varName: string): ExternalVarMetadata | undefined {
+  const key = getVarKey(compName, varName)
+  return {
+    units: unitDeclarations.value[key] || 'dimensionless',
+    initialValue: initialDeclarations.value[key] || undefined,
+    interface: interfaceDeclarations.value[key] || 'public',
+  }
+}
+
+const hasValidUnits = computed(() => {
+  return requiredVariables.value.every(v => !!unitDeclarations.value[v]?.trim())
+})
+
+export interface ComponentGroup {
+  componentName: string
+  variables: string[]
+  stateVariables: string[]
+  initialVariables: string[]
+}
+
+const updateVariableAnalysis = () => {
+  if (!currentDoc) return
+
+  const components = Array.from(currentDoc.getElementsByTagName('component'))
+  const groups: ComponentGroup[] = []
+  const reqVars: string[] = []
+
+  components.forEach((comp) => {
+    const compName = comp.getAttribute('name') || 'implicit_component'
+    const analysis = analyzeComponentVariables(comp)
+
+    groups.push({
+      componentName: compName,
+      // Pass all referenced variables (or analysis.required for missing only)
+      variables: analysis.variables.slice().sort(),
+      stateVariables: analysis.stateVariables,
+      initialVariables: [],
+    })
+
+    // Track un-declared variables requiring unit definitions
+    analysis.required.forEach((varName) => {
+      reqVars.push(getVarKey(compName, varName))
+    })
+  })
+
+  componentGroups.value = groups
+  requiredVariables.value = reqVars
+}
+
+function applyDeclarations() {
+  const currentParser = new CellMLTextParser({
+    simplified: isSimplified.value,
+    managed: isManaged.value,
+    getExternalVariable,
+  })
+  
+  const result = currentParser.parse(textOutput.value)
+  if (result.errors.length === 0 && result.xml) {
+    xmlInput.value = result.xml
+    currentDoc = currentParser['doc']
+    updateVariableAnalysis()
+  }
+}
 
 const handleStateUpdate = (viewUpdate: any) => {
   if (viewUpdate.selectionSet || viewUpdate.docChanged) {
@@ -235,7 +410,6 @@ const updatePreview = () => {
     const loc = eq.getAttribute('data-source-location')
     if (!loc) continue
 
-    // Parse the range.
     const [startStr, endStr] = loc.split('-')
     const start = parseInt(startStr || '0', 10)
     const end = endStr ? parseInt(endStr, 10) : start
@@ -252,57 +426,56 @@ const updatePreview = () => {
     }
   }
 
-  // Convert to LaTeX.
-  if (bestMatch) {
+  if (bestMatch && latexContainer.value) {
     const latex = latexGen.convert(bestMatch)
-    latexPreview.value = latex
-    if (latexContainer.value) {
-      katex.render(latex, latexContainer.value, { throwOnError: false, displayMode: true })
-    }
-  } else {
-    latexPreview.value = ''
-    if (latexContainer.value) latexContainer.value.innerHTML = "<span class='placeholder'>No equation selected</span>"
+    katex.render(latex, latexContainer.value, { throwOnError: false, displayMode: true })
+  } else if (latexContainer.value) {
+    latexContainer.value.innerHTML = "<span class='placeholder'>No equation selected</span>"
   }
 }
 
 // Regenerate text whenever XML changes
 watch(
-  [xmlInput, isSimplified],
-  ([newXml, simplified]) => {
+  [xmlInput, isSimplified, isManaged],
+  ([newXml, simplified, managed]) => {
     if (isUpdatingFromXml.value) return
-    const currentGenerator = new CellMLTextGenerator({ simplified })
-    textOutput.value = currentGenerator.generate(newXml)
+    const currentGen = new CellMLTextGenerator({ simplified, managed })
+    textOutput.value = currentGen.generate(newXml)
   },
   { immediate: true }
 )
 
-watch([textOutput, isSimplified], ([newVal, simplified]) => {
-  // Debounce this in production!
-  if (debouncer) clearTimeout(debouncer)
-  if (isUpdatingFromXml.value) return
+watch(
+  [textOutput, isSimplified, isManaged],
+  ([newVal, simplified, managed]) => {
+    if (isUpdatingFromXml.value) return
 
-  debouncer = setTimeout(async () => {
-    try {
-      const currentParser = new CellMLTextParser({ simplified })
-      const result = currentParser.parse(newVal)
+    if (debouncer) clearTimeout(debouncer)
+    debouncer = setTimeout(async () => {
+      try {
+        const currentParser = new CellMLTextParser({
+          simplified: isSimplified.value,
+          managed: isManaged.value,
+          getExternalVariable,
+        })
 
-      errors.value = result.errors
-      // Only update if success
-      if (result.errors.length === 0 && result.xml) {
-        isUpdatingFromXml.value = true
-        xmlInput.value = result.xml
-        currentDoc = currentParser['doc']
-        // Reset flag after a tick
-        setTimeout(() => (isUpdatingFromXml.value = false), 100)
-        await nextTick()
-        updatePreview()
+        const result = currentParser.parse(newVal)
+
+        if (result.errors.length === 0 && result.xml) {
+          isUpdatingFromXml.value = true
+          xmlInput.value = result.xml
+          currentDoc = currentParser['doc']
+          updateVariableAnalysis()
+
+          setTimeout(() => (isUpdatingFromXml.value = false), 50)
+        }
+      } catch (e) {
+        // Don't update XML while user is typing invalid syntax
+        // console.log('Parsing error (expected while typing):', e.message)
       }
-    } catch (e) {
-      // Don't update XML while user is typing invalid syntax
-      // console.log('Parsing error (expected while typing):', e.message)
-    }
-  }, 750)
-})
+    }, 500)
+  }
+)
 
 function listAvailableModules() {
   console.log('Available CellML modules:')
@@ -329,6 +502,7 @@ onMounted(async () => {
   // xmlInput.value = testXmlInput03
   parser.parse(textOutput.value)
   currentDoc = parser['doc']
+  updateVariableAnalysis()
 })
 </script>
 
@@ -345,8 +519,79 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
 }
-textarea,
-.code-view {
+.toolbar {
+  padding: 8px;
+  background: #eef2f5;
+  border: 1px solid #ccc;
+  margin-bottom: 8px;
+  border-radius: 4px;
+}
+.editor-layout {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+}
+.variable-pane {
+  background: #fdfdfd;
+  border: 1px solid #ccc;
+  padding: 12px;
+  max-width: 320px;
+}
+.variable-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+.variable-row {
+  border: 1px solid #e0e0e0;
+  padding: 8px;
+  border-radius: 4px;
+  background: #fff;
+}
+.var-header {
+  display: flex;
+  justify-content: space-between;
+  font-weight: bold;
+  margin-bottom: 6px;
+}
+.badge-state {
+  font-size: 0.75em;
+  background: #007acc;
+  color: #fff;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+.var-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85em;
+}
+.var-inputs input {
+  width: 100%;
+  padding: 4px;
+  margin-top: 2px;
+}
+.btn-apply {
+  margin-top: 10px;
+  padding: 8px;
+  background: #28a745;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.btn-apply:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+.empty-state {
+  color: #666;
+  font-style: italic;
+  font-size: 0.9em;
+}
+textarea {
   flex: 1;
   background: #f4f4f4;
   border: 1px solid #ccc;
@@ -356,34 +601,19 @@ textarea,
   white-space: pre;
   overflow: auto;
 }
-.code-view {
-  background: #1e1e1e;
-  color: #d4d4d4;
-}
 .preview-pane {
-  height: 100px;
+  height: 80px;
   background: white;
   border-bottom: 2px solid #ddd;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.5em;
-}
-.placeholder {
-  color: #ccc;
-  font-style: italic;
-  font-size: 0.8em;
+  font-size: 1.3em;
 }
 .error-banner {
   background-color: #ffebee;
   color: #c62828;
-  padding: 10px 15px;
-  border-bottom: 2px solid #ef9a9a;
+  padding: 10px;
   font-family: monospace;
-  font-size: 0.9em;
-  min-height: 40px; /* Prevent jumpiness */
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
 }
 </style>
