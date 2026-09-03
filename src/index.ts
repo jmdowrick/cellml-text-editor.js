@@ -5,6 +5,7 @@ export { CellMLLatexGenerator } from './lib/CellMLLatexGenerator'
 
 export { cellml } from './lib/CellMLLanguage'
 
+export {
   analyzeComponentVariables,
   buildComponentGroups,
   getVariableKey,
