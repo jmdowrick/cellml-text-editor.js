@@ -84,8 +84,9 @@
                   <label>
                     Units:
                     <input 
+                      :id="getVarKey(group.componentName, varName)"
                       type="text" 
-                      v-model="unitDeclarations[getVarKey(group.componentName, varName)]" 
+                      v-model="variableUnits[getVarKey(group.componentName, varName)]"
                       placeholder="e.g. millivolt, second"
                     />
                   </label>
@@ -155,6 +156,7 @@ const extensions = [sublime, cellml()]
 
 const isSimplified = ref(false)
 const isManaged = ref(false)
+const variableUnits = ref<Record<string, string>>({})
 
 // Sample CellML 2.0 XML to start with
 const xmlInput = ref(`<?xml version="1.0" encoding="UTF-8"?>
@@ -313,21 +315,17 @@ export interface VariableRef {
   variableName: string
 }
 
-const analyzedExternalVars = ref<VariableRef[]>([])
-const analyzedStateVars = ref<VariableRef[]>([])
-const analyzedInitialVars = ref<VariableRef[]>([])
-
 function getExternalVariable(compName: string, varName: string): ExternalVarMetadata | undefined {
   const key = getVarKey(compName, varName)
   return {
-    units: unitDeclarations.value[key] || 'dimensionless',
+    units: variableUnits.value[key] || 'dimensionless',
     initialValue: initialDeclarations.value[key] || undefined,
     interface: interfaceDeclarations.value[key] || 'public',
   }
 }
 
 const hasValidUnits = computed(() => {
-  return requiredVariables.value.every(v => !!unitDeclarations.value[v]?.trim())
+  return requiredVariables.value.every(v => !!variableUnits.value[v]?.trim())
 })
 
 export interface ComponentGroup {
@@ -343,25 +341,39 @@ const updateVariableAnalysis = () => {
   const components = Array.from(currentDoc.getElementsByTagName('component'))
   const groups: ComponentGroup[] = []
   const reqVars: string[] = []
+  
+  const mergedUnits = { ...variableUnits.value }
 
   components.forEach((comp) => {
     const compName = comp.getAttribute('name') || 'implicit_component'
     const analysis = analyzeComponentVariables(comp)
 
-    groups.push({
-      componentName: compName,
-      // Pass all referenced variables (or analysis.required for missing only)
-      variables: analysis.variables.slice().sort(),
-      stateVariables: analysis.stateVariables,
-      initialVariables: [],
+    const varNodes = Array.from(comp.getElementsByTagName('variable'))
+    varNodes.forEach((node) => {
+      const varName = node.getAttribute('name')
+      const existingUnit = node.getAttribute('units')
+      
+      if (varName && existingUnit) {
+        const key = getVarKey(compName, varName)
+        if (!mergedUnits[key]) {
+          mergedUnits[key] = existingUnit
+        }
+      }
     })
 
-    // Track un-declared variables requiring unit definitions
+    groups.push({
+      componentName: compName,
+      variables: analysis.variables.slice().sort(),
+      stateVariables: analysis.stateVariables,
+      initialVariables: analysis.initialVariables || [],
+    })
+
     analysis.required.forEach((varName) => {
       reqVars.push(getVarKey(compName, varName))
     })
   })
 
+  variableUnits.value = mergedUnits
   componentGroups.value = groups
   requiredVariables.value = reqVars
 }
