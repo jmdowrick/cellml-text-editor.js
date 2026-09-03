@@ -2,6 +2,7 @@ const CELLML_2_0_NS = 'http://www.cellml.org/cellml/2.0#'
 
 export interface CellMLTextGeneratorOptions {
   tabSize?: number | 2
+  simplified?: boolean | false
 }
 
 export class CellMLTextGenerator {
@@ -9,11 +10,13 @@ export class CellMLTextGenerator {
   private indentLevel: number = 0
   private domParser: DOMParser
   private standardIndent: string = '  '
+  private simplified: boolean = false
 
   constructor(options: CellMLTextGeneratorOptions = {}) {
     if (options.tabSize) {
       this.standardIndent = ' '.repeat(options.tabSize)
     }
+    this.simplified = options.simplified ?? true
     this.domParser = new DOMParser()
   }
 
@@ -51,8 +54,10 @@ export class CellMLTextGenerator {
 
   private processModel(model: Element) {
     const name = model.getAttribute('name') || 'unnamed_model'
-    this.append(`def model ${name} as`)
-    this.indentLevel++
+    if (!this.simplified) {
+      this.append(`def model ${name} as`)
+      this.indentLevel++
+    }
 
     // 1. Process Units
     const units = model.getElementsByTagName('units')
@@ -62,7 +67,8 @@ export class CellMLTextGenerator {
     }
 
     // 2. Process Components
-    const components = model.getElementsByTagName('component')
+    const components = Array.from(model.getElementsByTagName('component'))
+
     for (let i = 0; i < components.length; i++) {
       this.processComponent(components[i])
     }
@@ -70,8 +76,10 @@ export class CellMLTextGenerator {
     // Ensure single newline after last component.
     this.output = this.output.trimEnd() + '\n'
 
-    this.indentLevel--
-    this.append(`enddef;`)
+    if (!this.simplified) {
+      this.indentLevel--
+      this.append(`enddef;`)
+    }
   }
 
   private processUnits(unit: Element | null | undefined) {
@@ -104,8 +112,14 @@ export class CellMLTextGenerator {
 
   private processComponent(component: Element | null | undefined) {
     const name = component?.getAttribute('name') || 'unnamed_component'
-    this.append(`def comp ${name} as`)
-    this.indentLevel++
+
+    if (!this.simplified) {
+      this.append(`def comp ${name} as`)
+      this.indentLevel++
+    } else {
+      this.append(`comp ${name} {`)
+      this.indentLevel++
+    }
 
     // Variables.
     const vars = component?.getElementsByTagName('variable') || []
@@ -119,21 +133,31 @@ export class CellMLTextGenerator {
       this.processMath(maths[i])
     }
 
-    this.indentLevel--
-    this.append(`enddef;`)
-    this.append('') // Spacer
+    if (!this.simplified) {
+      this.indentLevel--
+      this.append(`enddef;`)
+      this.append('') // Spacer
+    } else {
+      this.indentLevel--
+      this.append(`}`)
+      this.append('')
+    }
   }
 
   private processVariable(v: Element | null | undefined) {
     const name = v?.getAttribute('name')
     const units = v?.getAttribute('units')
     const initial = v?.getAttribute('initial_value')
-    const inf = v?.getAttribute('interface') // public, private, etc.
+    const inf = v?.getAttribute('interface') || 'public'
     let line = `var ${name}: ${units}`
     let attributes = []
 
     if (initial) attributes.push(`init: ${initial}`)
-    if (inf) attributes.push(`interface: ${inf}`) // Simplified mapping
+
+    const shouldHideInterface = this.simplified && inf === 'public'
+    if (inf && !shouldHideInterface) {
+      attributes.push(`interface: ${inf}`)
+    }
 
     if (attributes.length > 0) {
       line += ` {${attributes.join(', ')}}`
@@ -184,7 +208,6 @@ export class CellMLTextGenerator {
       let value = node.textContent?.trim() || '0'
       const type = node.getAttribute('type')
 
-      // Handle explicit e-notation structure.
       if (type === 'e-notation') {
         const children = Array.from(node.childNodes)
         const sepIndex = children.findIndex((c) => c.nodeType === 1 && (c as Element).localName === 'sep')
@@ -205,10 +228,17 @@ export class CellMLTextGenerator {
         }
       }
 
-      // Extract the cellml:units attribute
-      const units = node.getAttributeNS(CELLML_2_0_NS, 'units')
+      // Extract units attribute across namespace variants
+      const units =
+        node.getAttributeNS(CELLML_2_0_NS, 'units') ||
+        node.getAttribute('cellml:units') ||
+        node.getAttribute('units')
 
-      return units ? `${value} {${units}}` : value
+      // Suppress {units: dimensionless} ONLY in simple mode
+      if (units && !(this.simplified && units === 'dimensionless')) {
+        return `${value} {${units}}`
+      }
+      return value
     } else if (tag === 'piecewise') {
       return this.parsePiecewise(node)
     } else if (tag === 'pi') {

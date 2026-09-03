@@ -10,6 +10,7 @@ export interface ParserOptions {
    * @default "data-source-location"
    */
   sourceLineAttribute?: string | null
+  simplified?: boolean | false
 }
 
 export interface ParserError {
@@ -26,11 +27,12 @@ export class CellMLTextParser {
   private scanner!: CellMLTextScanner
   private doc!: XMLDocument
   private sourceLineAttr: string | null
+  private simplified: boolean
 
   constructor(options: ParserOptions = {}) {
-    // Default to 'data-source-location' if undefined, but allow null to disable
     this.sourceLineAttr =
       options.sourceLineAttribute === undefined ? 'data-source-location' : options.sourceLineAttribute
+    this.simplified = options.simplified ?? true
   }
 
   public parse(text: string): ParserResult {
@@ -39,37 +41,80 @@ export class CellMLTextParser {
 
     try {
       const root = this.doc.documentElement
-      // The createDocument call sets the namespace on the root, but we need to ensure attributes are handled
 
-      // Expect: def model <name> as
-      this.expect(TokenType.KwDef)
-      this.expect(TokenType.KwModel)
+      if (this.simplified && this.scanner.token !== TokenType.KwDef) {
+        root.setAttribute('name', 'implicit_model')
 
-      if (this.scanner.token === TokenType.Identifier) {
-        root.setAttribute('name', this.scanner.value)
-        this.scanner.nextToken()
-      }
+        let defaultComp: Element | null = null
+        const getDefaultComp = () => {
+          if (!defaultComp) {
+            defaultComp = this.doc.createElementNS(CELLML_NS, 'component')
+            defaultComp.setAttribute('name', 'implicit_component')
+            root.appendChild(defaultComp)
+          }
+          return defaultComp
+        }
 
-      this.expect(TokenType.KwAs)
+        while (this.scanner.token !== TokenType.EOF) {
+          if (this.scanner.token === TokenType.KwComp) {
+            this.parseSimpleComponentBlock(root)
+          } else if (this.scanner.token === TokenType.KwVar) {
+            this.parseVariable(getDefaultComp())
+          } else if (this.scanner.token === TokenType.Identifier || this.scanner.token === TokenType.KwSel) {
+            this.parseMathEquation(getDefaultComp())
+          } else {
+            this.scanner.nextToken()
+          }
+        }
+      } else {
+        // Standard Advanced Mode parsing
+        this.expect(TokenType.KwDef)
+        this.expect(TokenType.KwModel)
 
-      while (this.scanner.token !== TokenType.KwEndDef && this.scanner.token !== TokenType.EOF) {
-        if (this.scanner.token === TokenType.KwDef) {
-          // Check lookahead for 'comp' or 'unit'
-          // We are already at 'def', so we parse based on context
-          this.parseBlock(root)
-        } else {
-          // Unexpected, consume to avoid infinite loop
+        if (this.scanner.token === TokenType.Identifier) {
+          root.setAttribute('name', this.scanner.value)
           this.scanner.nextToken()
         }
+
+        this.expect(TokenType.KwAs)
+
+        while (this.scanner.token !== TokenType.KwEndDef && this.scanner.token !== TokenType.EOF) {
+          if (this.scanner.token === TokenType.KwDef) {
+            this.parseBlock(root)
+          } else {
+            this.scanner.nextToken()
+          }
+        }
+
+        this.expect(TokenType.KwEndDef) // enddef
+        this.expect(TokenType.SemiColon) // ; (optional in some grammars, but strict in C++)
       }
-
-      this.expect(TokenType.KwEndDef) // enddef
-      this.expect(TokenType.SemiColon) // ; (optional in some grammars, but strict in C++)
-
       return { xml: '<?xml version="1.0" encoding="UTF-8"?>\n' + this.serialize(root), errors: [] }
     } catch (e: any) {
       return { xml: null, errors: [{ line: this.scanner.getLine(), message: e.message || 'Unknown parsing error' }] }
     }
+  }
+
+  private parseSimpleComponentBlock(parent: Element) {
+    this.expect(TokenType.KwComp)
+    const name = this.expectValue(TokenType.Identifier)
+    this.expect(TokenType.LBrace) // Expect {
+
+    const comp = this.doc.createElementNS(CELLML_NS, 'component')
+    comp.setAttribute('name', name)
+    parent.appendChild(comp)
+
+    while (this.scanner.token !== TokenType.RBrace && this.scanner.token !== TokenType.EOF) {
+      if (this.scanner.token === TokenType.KwVar) {
+        this.parseVariable(comp)
+      } else if (this.scanner.token === TokenType.Identifier || this.scanner.token === TokenType.KwSel) {
+        this.parseMathEquation(comp)
+      } else {
+        this.scanner.nextToken()
+      }
+    }
+
+    this.expect(TokenType.RBrace) // Consume }
   }
 
   private parseBlock(parent: Element) {
@@ -97,10 +142,8 @@ export class CellMLTextParser {
       if (this.scanner.token === TokenType.KwVar) {
         this.parseVariable(comp)
       } else if (this.scanner.token === TokenType.Identifier || this.scanner.token === TokenType.KwSel) {
-        // Assume Math start (variable name or 'sel')
         this.parseMathEquation(comp)
       } else {
-        // Skip unknown inside component
         this.scanner.nextToken()
       }
     }
@@ -109,7 +152,6 @@ export class CellMLTextParser {
     this.expect(TokenType.SemiColon)
   }
 
-  // var V: millivolt {init: -65, interface: public};
   private parseVariable(parent: Element) {
     this.expect(TokenType.KwVar)
     const name = this.expectValue(TokenType.Identifier)
@@ -120,13 +162,14 @@ export class CellMLTextParser {
     variable.setAttribute('name', name)
     variable.setAttribute('units', units)
 
-    // Properties { ... }
+    let hasInterface = false
+
     if ((this.scanner.token as TokenType) === TokenType.LBrace) {
-      this.scanner.nextToken() // eat {
+      this.scanner.nextToken()
       while ((this.scanner.token as TokenType) !== TokenType.RBrace && this.scanner.token !== TokenType.EOF) {
         const prop = this.expectValue(TokenType.Identifier)
         this.expect(TokenType.Colon)
-        // Value can be identifier (public) or Number (-65)
+
         let val = ''
         if ((this.scanner.token as TokenType) === TokenType.OpMinus) {
           this.scanner.nextToken()
@@ -137,13 +180,20 @@ export class CellMLTextParser {
           val = this.expectValue(TokenType.Identifier)
         }
 
-        // Mapping
         if (prop === 'init') variable.setAttribute('initial_value', val)
-        else if (prop === 'interface') variable.setAttribute('interface', val) // simplified
+        else if (prop === 'interface') {
+          variable.setAttribute('interface', val)
+          hasInterface = true
+        }
 
         if ((this.scanner.token as TokenType) === TokenType.OpComma) this.scanner.nextToken()
       }
-      this.expect(TokenType.RBrace) // eat }
+      this.expect(TokenType.RBrace)
+    }
+
+    // Explicitly tag interface="public" in XML DOM when unspecified in text
+    if (!hasInterface) {
+      variable.setAttribute('interface', 'public')
     }
 
     this.expect(TokenType.SemiColon)
@@ -151,10 +201,7 @@ export class CellMLTextParser {
   }
 
   private parseUnit(parent: Element) {
-    // Basic placeholder - logic is similar to var
     this.expect(TokenType.KwUnit)
-    // ... implementation similar to comp/var ...
-    // Consume until enddef or EOF.
     while (this.scanner.token !== TokenType.KwEndDef && this.scanner.token !== TokenType.EOF) {
       this.scanner.nextToken()
     }
@@ -166,8 +213,6 @@ export class CellMLTextParser {
 
   private parseMathEquation(parent: Element) {
     const startLine = this.scanner.getLine()
-    // We need a <math> container. In CellML, components usually have one <math> block,
-    // but for this parser we append expressions to it.
     let math = parent.getElementsByTagNameNS(MATHML_NS, 'math')[0]
     if (!math) {
       math = this.doc.createElementNS(MATHML_NS, 'math')
@@ -175,17 +220,12 @@ export class CellMLTextParser {
     }
 
     const apply = this.doc.createElementNS(MATHML_NS, 'apply')
-
     const eq = this.doc.createElementNS(MATHML_NS, 'eq')
     apply.appendChild(eq)
 
-    // LHS: Could be 'V' or 'ode(V, t)'
     const lhsNode = this.parseExpression()
-
     this.expect(TokenType.OpAss)
-
     const rhsNode = this.parseExpression()
-
     const endLine = this.scanner.getLine()
 
     if (this.sourceLineAttr) {
@@ -197,7 +237,6 @@ export class CellMLTextParser {
 
     apply.appendChild(lhsNode)
     apply.appendChild(rhsNode)
-
     math.appendChild(apply)
 
     this.expect(TokenType.SemiColon)
@@ -211,7 +250,7 @@ export class CellMLTextParser {
     // 2. Loop while we see Logical Operators
     while (this.scanner.token === TokenType.OpAnd || this.scanner.token === TokenType.OpOr) {
       const op = this.scanner.token
-      this.scanner.nextToken() // Consume 'and' / 'or'
+      this.scanner.nextToken()
 
       // 3. Get the next condition (e.g., "y < 10")
       const right = this.parseComparison()
@@ -356,16 +395,15 @@ export class CellMLTextParser {
     // Map of "User Text" -> "MathML Tag Name"
     const constants: Record<string, string> = {
       pi: 'pi',
-      e: 'exponentiale', // Standard math constant e
-      inf: 'infinity', // Common abbreviation
+      e: 'exponentiale',
+      inf: 'infinity',
       infinity: 'infinity',
       NaN: 'notanumber',
-      true: 'true', // Boolean constants
+      true: 'true',
       false: 'false',
     }
 
     if (constants.hasOwnProperty(name)) {
-      // These are self-closing tags like <pi/>, <exponentiale/>
       return this.doc.createElementNS(MATHML_NS, constants[name] || '')
     }
 
@@ -375,10 +413,10 @@ export class CellMLTextParser {
   private parseFactor(): Element {
     // Handle unary minus.
     if (this.scanner.token === TokenType.OpMinus) {
-      this.scanner.nextToken() // Consume the '-'
 
       // Recursively call parseFactor.
       // This handles cases like "-5", "-a", or even "- -5"
+      this.scanner.nextToken()
       const child = this.parseFactor()
 
       // Create the <apply><minus/><child/></apply> structure
@@ -390,39 +428,25 @@ export class CellMLTextParser {
 
       return apply
     }
-    // Identifier, Number, or Parentheses.
+
     if (this.scanner.token === TokenType.Number) {
       const val = this.scanner.value
       this.scanner.nextToken()
       const cn = this.doc.createElementNS(MATHML_NS, 'cn')
+      let hasExplicitUnits = false
 
       // Check for a units annotation attached to number, e.g. {dimensionless}
-      // (new form) or the legacy {units: dimensionless} form. Both are accepted
-      // on input; the generator always emits the new compact form on output.
       if ((this.scanner.token as TokenType) === TokenType.LBrace) {
         this.scanner.nextToken() // eat '{'
-        if ((this.scanner.token as TokenType) === TokenType.Identifier) {
-          const firstIdent = this.scanner.value
-          this.scanner.nextToken()
-
-          if (firstIdent === 'units' && (this.scanner.token as TokenType) === TokenType.Colon) {
-            // Legacy form: {units: dimensionless}
-            this.scanner.nextToken() // eat ':'
-            const uVal = this.expectValue(TokenType.Identifier)
-            cn.setAttributeNS(CELLML_NS, 'cellml:units', uVal)
-          } else {
-            // New compact form: {dimensionless}
-            cn.setAttributeNS(CELLML_NS, 'cellml:units', firstIdent)
-          }
-        }
-        // consume rest of brace content if any
-        while (
-          (this.scanner.token as TokenType) !== TokenType.RBrace &&
-          (this.scanner.token as TokenType) !== TokenType.EOF
-        ) {
-          this.scanner.nextToken()
-        }
+        const unitsName = this.expectValue(TokenType.Identifier)
+        cn.setAttributeNS(CELLML_NS, 'cellml:units', unitsName)
+        hasExplicitUnits = true
         this.expect(TokenType.RBrace)
+      }
+
+      // Explicitly tag cellml:units="dimensionless" in XML DOM when omitted in text
+      if (!hasExplicitUnits) {
+        cn.setAttributeNS(CELLML_NS, 'cellml:units', 'dimensionless')
       }
 
       if (val.match(/^-?[\d.]+[eE][+-]?\d+$/)) {
@@ -455,9 +479,9 @@ export class CellMLTextParser {
       ci.textContent = name
       return ci
     } else if (this.scanner.token === TokenType.LParam) {
-      this.scanner.nextToken() // (
+      this.scanner.nextToken()
       const node = this.parseExpression()
-      this.expect(TokenType.RParam) // )
+      this.expect(TokenType.RParam)
       return node
     } else if (this.scanner.token === TokenType.KwSel) {
       return this.parsePiecewise()
@@ -469,7 +493,7 @@ export class CellMLTextParser {
   private parsePiecewise(): Element {
     const piecewise = this.doc.createElementNS(MATHML_NS, 'piecewise')
 
-    this.expect(TokenType.KwSel) // Consume 'sel'
+    this.expect(TokenType.KwSel)
 
     // Handle 'case' blocks
     while (this.scanner.token === TokenType.KwCase) {
@@ -496,9 +520,7 @@ export class CellMLTextParser {
     if (this.scanner.token === TokenType.KwOtherwise) {
       this.expect(TokenType.KwOtherwise)
       this.expect(TokenType.Colon)
-
       const value = this.parseExpression()
-
       this.expect(TokenType.SemiColon)
 
       const otherwise = this.doc.createElementNS(MATHML_NS, 'otherwise')
@@ -515,9 +537,9 @@ export class CellMLTextParser {
 
     // Special Case: ode(dep, indep) -> <diff/> <bvar>indep</bvar> dep
     if (funcName === 'ode') {
-      const dep = this.parseExpression() // V
+      const dep = this.parseExpression()
       this.expect(TokenType.OpComma)
-      const indep = this.parseExpression() // t
+      const indep = this.parseExpression()
       this.expect(TokenType.RParam)
 
       const diffApply = this.doc.createElementNS(MATHML_NS, 'apply')
@@ -531,12 +553,10 @@ export class CellMLTextParser {
       return diffApply
     }
 
-    // Normal function (sin, cos)
     const apply = this.doc.createElementNS(MATHML_NS, 'apply')
     const op = this.doc.createElementNS(MATHML_NS, funcName)
     apply.appendChild(op)
 
-    // Parse arguments
     if (this.scanner.token !== TokenType.RParam) {
       do {
         if (this.scanner.token === TokenType.OpComma) this.scanner.nextToken()
@@ -613,7 +633,7 @@ export class CellMLTextParser {
 
   private serialize(node: Element, level: number = 0): string {
     const indent = '  '.repeat(level)
-    const tagName = node.tagName // will include prefix if set
+    const tagName = node.tagName
     const localName = node.localName
 
     // Explicitly add xmlns if this is a CellML model or MathML block
@@ -646,7 +666,7 @@ export class CellMLTextParser {
 
     // Determine if we have children.
     const children = Array.from(node.childNodes)
-    const hasElementChildren = children.some((c) => c.nodeType === 1) // 1 = Element
+    const hasElementChildren = children.some((c) => c.nodeType === 1)
     const textContent = node.textContent?.trim()
 
     // Self-closing tag (e.g. <diff/>).
