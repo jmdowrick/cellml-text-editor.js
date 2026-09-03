@@ -435,14 +435,27 @@ export class CellMLTextParser {
       const cn = this.doc.createElementNS(MATHML_NS, 'cn')
       let hasExplicitUnits = false
 
+      // Check for a units annotation attached to number, e.g. {dimensionless}
+      // (new form) or the legacy {units: dimensionless} form. Both are accepted
+      // on input; the generator always emits the new compact form on output.
       if ((this.scanner.token as TokenType) === TokenType.LBrace) {
-        this.scanner.nextToken()
-        if (this.scanner.value === 'units') {
+        this.scanner.nextToken() // eat '{'
+        if ((this.scanner.token as TokenType) === TokenType.Identifier) {
+          const firstIdent = this.scanner.value
           this.scanner.nextToken()
-          this.expect(TokenType.Colon)
-          const uVal = this.expectValue(TokenType.Identifier)
-          cn.setAttributeNS(CELLML_NS, 'cellml:units', uVal)
-          hasExplicitUnits = true
+
+          if (firstIdent === 'units') {
+            hasExplicitUnits = true
+            if ((this.scanner.token as TokenType) === TokenType.Colon) {
+              // Legacy form: {units: dimensionless}
+              this.scanner.nextToken() // eat ':'
+              const uVal = this.expectValue(TokenType.Identifier)
+              cn.setAttributeNS(CELLML_NS, 'cellml:units', uVal)
+            } else {
+              // Compact form: {dimensionless}
+              cn.setAttributeNS(CELLML_NS, 'cellml:units', firstIdent)
+            }
+          }
         }
         while (
           (this.scanner.token as TokenType) !== TokenType.RBrace &&

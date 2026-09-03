@@ -237,7 +237,7 @@ export class CellMLTextGenerator {
 
       // Suppress {units: dimensionless} ONLY in simple mode
       if (units && !(this.simplified && units === 'dimensionless')) {
-        return `${value} {units: ${units}}`
+        return `${value} {${units}}`
       }
       return value
     } else if (tag === 'piecewise') {
