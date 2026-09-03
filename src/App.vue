@@ -9,7 +9,14 @@
       <div v-else class="preview-pane" ref="latexContainer"></div>
 
       <div class="panel">
-        <h3>CellML Text</h3>
+        <div class="header-row">
+          <h3>CellML Text</h3>
+          <label class="toggle-label">
+            <input type="checkbox" v-model="isSimplified" />
+            Simplified View
+          </label>
+        </div>
+        
         <codemirror
           v-model="textOutput"
           :style="{ height: '400px' }"
@@ -55,6 +62,8 @@ const cellmlModules = import.meta.glob('./assets/cellml/*.cellml', {
 }) as Record<string, { default: string }>
 
 const extensions = [sublime, cellml()]
+
+const isSimplified = ref(false)
 
 // Sample CellML 2.0 XML to start with
 const xmlInput = ref(`<?xml version="1.0" encoding="UTF-8"?>
@@ -258,30 +267,31 @@ const updatePreview = () => {
 
 // Regenerate text whenever XML changes
 watch(
-  xmlInput,
-  (newVal) => {
+  [xmlInput, isSimplified],
+  ([newXml, simplified]) => {
     if (isUpdatingFromXml.value) return
-    textOutput.value = generator.generate(newVal)
+    const currentGenerator = new CellMLTextGenerator({ simplified })
+    textOutput.value = currentGenerator.generate(newXml)
   },
   { immediate: true }
 )
 
-watch(textOutput, (newVal) => {
+watch([textOutput, isSimplified], ([newVal, simplified]) => {
   // Debounce this in production!
   if (debouncer) clearTimeout(debouncer)
   if (isUpdatingFromXml.value) return
 
   debouncer = setTimeout(async () => {
     try {
-      const result = parser.parse(newVal)
+      const currentParser = new CellMLTextParser({ simplified })
+      const result = currentParser.parse(newVal)
 
       errors.value = result.errors
-
       // Only update if success
       if (result.errors.length === 0 && result.xml) {
         isUpdatingFromXml.value = true
         xmlInput.value = result.xml
-        currentDoc = parser['doc']
+        currentDoc = currentParser['doc']
         // Reset flag after a tick
         setTimeout(() => (isUpdatingFromXml.value = false), 100)
         await nextTick()

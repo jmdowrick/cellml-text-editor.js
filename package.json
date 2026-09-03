@@ -69,5 +69,6 @@
     "vue-codemirror": "^6.1.1",
     "vue-tsc": "^3.2.2",
     "vue3-libcellml.js": "^0.6.3"
-  }
+  },
+  "packageManager": "yarn@4.18.0"
 }
