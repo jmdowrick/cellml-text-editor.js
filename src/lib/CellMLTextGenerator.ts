@@ -68,10 +68,9 @@ export class CellMLTextGenerator {
 
     // 2. Process Components
     const components = Array.from(model.getElementsByTagName('component'))
-    const hasMultipleComponents = this.simplified && components.length > 1
 
     for (let i = 0; i < components.length; i++) {
-      this.processComponent(components[i], hasMultipleComponents)
+      this.processComponent(components[i])
     }
 
     // Ensure single newline after last component.
@@ -111,13 +110,13 @@ export class CellMLTextGenerator {
     this.append('') // Spacer
   }
 
-  private processComponent(component: Element | null | undefined, useBraces: boolean = false) {
+  private processComponent(component: Element | null | undefined) {
     const name = component?.getAttribute('name') || 'unnamed_component'
 
     if (!this.simplified) {
       this.append(`def comp ${name} as`)
       this.indentLevel++
-    } else if (useBraces) {
+    } else {
       this.append(`comp ${name} {`)
       this.indentLevel++
     }
@@ -138,7 +137,7 @@ export class CellMLTextGenerator {
       this.indentLevel--
       this.append(`enddef;`)
       this.append('') // Spacer
-    } else if (useBraces) {
+    } else {
       this.indentLevel--
       this.append(`}`)
       this.append('')
