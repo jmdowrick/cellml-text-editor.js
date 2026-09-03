@@ -21,24 +21,24 @@
 
       <div class="editor-layout">
         <div class="panel">
-        <div class="header-row">
-          <h3>CellML Text</h3>
-          <label class="toggle-label">
-            <input type="checkbox" v-model="isSimplified" />
-            Simplified View
-          </label>
-        </div>
+          <div class="header-row">
+            <h3>CellML Text</h3>
+            <label class="toggle-label">
+              <input type="checkbox" v-model="isSimplified" />
+              Simplified View
+            </label>
+          </div>
         
-        <codemirror
-          v-model="textOutput"
-          :style="{ height: '400px' }"
-          :autofocus="true"
-          :indent-with-tab="true"
-          :tab-size="2"
-          :extensions="extensions"
-          @update="handleStateUpdate"
-        >
-        </codemirror>
+          <codemirror
+            v-model="textOutput"
+            :style="{ height: '400px' }"
+            :autofocus="true"
+            :indent-with-tab="true"
+            :tab-size="2"
+            :extensions="extensions"
+            @update="handleStateUpdate"
+          >
+          </codemirror>
         </div>
 
         <!-- External Variable Management Pane -->
