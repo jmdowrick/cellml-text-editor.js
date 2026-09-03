@@ -396,14 +396,24 @@ export class CellMLTextParser {
       this.scanner.nextToken()
       const cn = this.doc.createElementNS(MATHML_NS, 'cn')
 
-      // Check for {units: ...} attached to number.
+      // Check for a units annotation attached to number, e.g. {dimensionless}
+      // (new form) or the legacy {units: dimensionless} form. Both are accepted
+      // on input; the generator always emits the new compact form on output.
       if ((this.scanner.token as TokenType) === TokenType.LBrace) {
-        this.scanner.nextToken()
-        if (this.scanner.value === 'units') {
-          this.scanner.nextToken() // eat 'units'
-          this.expect(TokenType.Colon)
-          const uVal = this.expectValue(TokenType.Identifier)
-          cn.setAttributeNS(CELLML_NS, 'cellml:units', uVal)
+        this.scanner.nextToken() // eat '{'
+        if ((this.scanner.token as TokenType) === TokenType.Identifier) {
+          const firstIdent = this.scanner.value
+          this.scanner.nextToken()
+
+          if (firstIdent === 'units' && (this.scanner.token as TokenType) === TokenType.Colon) {
+            // Legacy form: {units: dimensionless}
+            this.scanner.nextToken() // eat ':'
+            const uVal = this.expectValue(TokenType.Identifier)
+            cn.setAttributeNS(CELLML_NS, 'cellml:units', uVal)
+          } else {
+            // New compact form: {dimensionless}
+            cn.setAttributeNS(CELLML_NS, 'cellml:units', firstIdent)
+          }
         }
         // consume rest of brace content if any
         while (
