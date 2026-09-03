@@ -1,131 +1,138 @@
 <template>
-  <div class="container">
-    <div class="panel">
-      <!-- Top Bar: Mode Toggle -->
-      <div class="toolbar">
-        <label class="toggle-label">
-          <input 
-            type="checkbox" 
-            v-model="isManaged" 
-          />
-          <strong>External Variable Management</strong>
-        </label>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="app-title">
+        <h1>CellML Studio</h1>
+        <p>Text, XML, and LaTeX views of a CellML 2.0 model, kept in sync as you edit.</p>
       </div>
 
+      <div class="mode-toggles">
+        <label class="switch">
+          <input type="checkbox" v-model="isSimplified" />
+          <span class="switch-track"></span>
+          Simplified view
+        </label>
+        <label class="switch">
+          <input type="checkbox" v-model="isManaged" />
+          <span class="switch-track"></span>
+          External variable management
+        </label>
+      </div>
+    </header>
+
+    <section class="preview-band">
       <div v-if="errors.length > 0" class="error-banner">
-        <div v-for="(err, index) in errors" :key="index">
-          <strong>Line {{ err.line }}:</strong> {{ err.message }}
+        <div v-for="(err, index) in errors" :key="index" class="error-line">
+          <span class="error-loc">Line {{ err.line }}</span>{{ err.message }}
         </div>
       </div>
       <div v-else class="preview-pane" ref="latexContainer"></div>
+    </section>
 
-      <div class="editor-layout">
-        <div class="panel">
-          <div class="header-row">
-            <h3>CellML Text</h3>
-            <label class="toggle-label">
-              <input type="checkbox" v-model="isSimplified" />
-              Simplified View
-            </label>
-          </div>
-        
-          <codemirror
-            v-model="textOutput"
-            :style="{ height: '400px' }"
-            :autofocus="true"
-            :indent-with-tab="true"
-            :tab-size="2"
-            :extensions="extensions"
-            @update="handleStateUpdate"
-          >
-          </codemirror>
+    <section class="workspace" :class="{ 'is-managed': isManaged }">
+      <div class="panel">
+        <div class="panel-header">
+          <h2>CellML text</h2>
+        </div>
+        <codemirror
+          v-model="textOutput"
+          class="editor"
+          :style="{ height: '460px' }"
+          :autofocus="true"
+          :indent-with-tab="true"
+          :tab-size="2"
+          :extensions="extensions"
+          @update="handleStateUpdate"
+        >
+        </codemirror>
+      </div>
+
+      <!-- External Variable Management Pane -->
+      <div v-if="isManaged" class="panel variable-panel">
+        <div class="panel-header">
+          <h2>Referenced variables</h2>
         </div>
 
-        <!-- External Variable Management Pane -->
-        <div v-if="isManaged" class="panel variable-pane">
-          <h3>All Referenced Variables</h3>
-          
-          <div class="variable-list">
-            <div 
-              v-for="group in componentGroups" 
-              :key="group.componentName" 
-              class="component-group"
+        <div class="variable-list">
+          <div
+            v-for="group in componentGroups"
+            :key="group.componentName"
+            class="component-group"
+          >
+            <div class="component-title">{{ group.componentName }}</div>
+
+            <div
+              v-for="varName in group.variables"
+              :key="varName"
+              class="variable-row"
             >
-              <div class="component-title">
-                Component: <span>{{ group.componentName }}</span>
+              <div class="var-header">
+                <span class="var-name">{{ varName }}</span>
+
+                <!-- Metadata Role Badges -->
+                <div class="badge-group">
+                  <span v-if="group.stateVariables.includes(varName)" class="badge badge-state">
+                    ODE state
+                  </span>
+                  <span v-if="group.initialVariables.includes(varName)" class="badge badge-init">
+                    Initializer
+                  </span>
+                  <span
+                    v-if="!group.stateVariables.includes(varName) && !group.initialVariables.includes(varName)"
+                    class="badge badge-ref"
+                  >
+                    External ref
+                  </span>
+                </div>
               </div>
 
-              <div 
-                v-for="varName in group.variables" 
-                :key="varName" 
-                class="variable-row"
-              >
-                <div class="var-header">
-                  <span class="var-name">{{ varName }}</span>
-                  
-                  <!-- Metadata Role Badges -->
-                  <div class="badge-group">
-                    <span v-if="group.stateVariables.includes(varName)" class="badge badge-state">
-                      ODE State
-                    </span>
-                    <span v-if="group.initialVariables.includes(varName)" class="badge badge-init">
-                      Initializer
-                    </span>
-                    <span 
-                      v-if="!group.stateVariables.includes(varName) && !group.initialVariables.includes(varName)" 
-                      class="badge badge-ref"
-                    >
-                      External Ref
-                    </span>
-                  </div>
-                </div>
-                
-                <div class="var-inputs">
-                  <label>
-                    Units:
-                    <input 
-                      :id="getVarKey(group.componentName, varName)"
-                      type="text" 
-                      v-model="variableUnits[getVarKey(group.componentName, varName)]"
-                      placeholder="e.g. millivolt, second"
-                    />
-                  </label>
+              <div class="var-inputs">
+                <label>
+                  <span>Units</span>
+                  <input
+                    :id="getVarKey(group.componentName, varName)"
+                    type="text"
+                    v-model="variableUnits[getVarKey(group.componentName, varName)]"
+                    placeholder="e.g. millivolt, second"
+                  />
+                </label>
 
-                  <!-- Show companion input if variable requires an initial value declaration -->
-                  <label v-if="group.stateVariables.includes(varName)">
-                    Initial Value Companion:
-                    <input 
-                      type="text" 
-                      v-model="initialDeclarations[getVarKey(group.componentName, varName)]" 
-                      placeholder="e.g. V_init"
-                    />
-                  </label>
-                </div>
+                <!-- Show companion input if variable requires an initial value declaration -->
+                <label v-if="group.stateVariables.includes(varName)">
+                  <span>Initial value companion</span>
+                  <input
+                    type="text"
+                    v-model="initialDeclarations[getVarKey(group.componentName, varName)]"
+                    placeholder="e.g. V_init"
+                  />
+                </label>
               </div>
             </div>
-
-            <button 
-              class="btn-apply" 
-              @click="applyDeclarations"
-              :disabled="!hasValidUnits"
-            >
-              Apply Unit Declarations
-            </button>
           </div>
+
+          <button
+            class="btn-apply"
+            @click="applyDeclarations"
+            :disabled="!hasValidUnits"
+          >
+            Apply unit declarations
+          </button>
         </div>
       </div>
-    </div>
 
-    <div class="panel">
-      <h3>CellML 2.0 XML</h3>
-      <textarea spellcheck="false">{{ xmlInput }}</textarea>
-    </div>
+      <div class="panel">
+        <div class="panel-header">
+          <h2>CellML 2.0 XML</h2>
+        </div>
+        <textarea class="xml-output" spellcheck="false" readonly>{{ xmlInput }}</textarea>
+      </div>
+    </section>
   </div>
 </template>
 
 <script setup lang="ts">
 // @ts-ignore
-import { inject, onMounted, ref, watch, computed } from 'vue'
+import { inject, nextTick, onMounted, ref, watch, computed } from 'vue'
 import { Codemirror } from 'vue-codemirror'
 import { sublime } from '@uiw/codemirror-theme-sublime'
 import katex from 'katex'
@@ -291,12 +298,14 @@ const testXmlInput03 = `
 
 const textOutput = ref('')
 
+const generator = new CellMLTextGenerator()
 const parser = new CellMLTextParser()
 const latexGen = new CellMLLatexGenerator()
 
 const isUpdatingFromXml = ref(false)
 let debouncer: any = null
 const cursorLine = ref(1)
+const latexPreview = ref('')
 const latexContainer = ref<HTMLElement | null>(null)
 let currentDoc: Document | null = null
 const errors = ref<ParserError[]>([])
@@ -304,9 +313,14 @@ const errors = ref<ParserError[]>([])
 // Reactive State for External Management
 const componentGroups = ref<ComponentGroup[]>([])
 const requiredVariables = ref<string[]>([])
+const stateVars = ref<string[]>([])
+const unitDeclarations = ref<Record<string, string>>({})
 const initialDeclarations = ref<Record<string, string>>({})
 const interfaceDeclarations = ref<Record<string, string>>({})
 
+// A VariableResolver backed directly by this component's own ref state, so the "Apply Unit
+// Declarations" panel is just a UI on top of the same resolution contract a real backend
+// resolver would implement.
 const liveResolver: VariableResolver = {
   async resolveVariables(request: VariableResolutionRequest): Promise<VariableResolutionResult> {
     const resolved: VariableResolutionResult['resolved'] = []
@@ -496,113 +510,375 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.container {
-  display: flex;
-  height: 95vh;
-  gap: 20px;
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+.app-shell {
+  --color-bg: #eef1f4;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f6f7f9;
+  --color-border: #d7dce2;
+  --color-border-strong: #b9c1cb;
+  --color-text: #161a1f;
+  --color-text-muted: #5b6572;
+  --color-accent: #2a5db0;
+  --color-accent-hover: #21497e;
+  --color-state-bg: #fcedd9;
+  --color-state-fg: #8a4b06;
+  --color-init-bg: #e3edfb;
+  --color-init-fg: #1d4c8c;
+  --color-ref-bg: #edeff2;
+  --color-ref-fg: #4b5563;
+  --color-error-bg: #fbeaea;
+  --color-error-fg: #8a1f1f;
+  --color-error-border: #e4b8b8;
+  --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 16px;
+  height: 100vh;
+  box-sizing: border-box;
   padding: 20px;
-  font-family: sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
 }
-.panel {
-  flex: 1;
+
+/* --- Header --- */
+
+.app-header {
   display: flex;
-  flex-direction: column;
-}
-.toolbar {
-  padding: 8px;
-  background: #eef2f5;
-  border: 1px solid #ccc;
-  margin-bottom: 8px;
-  border-radius: 4px;
-}
-.editor-layout {
-  display: flex;
-  gap: 12px;
-  flex: 1;
-}
-.variable-pane {
-  background: #fdfdfd;
-  border: 1px solid #ccc;
-  padding: 12px;
-  max-width: 320px;
-}
-.variable-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-}
-.variable-row {
-  border: 1px solid #e0e0e0;
-  padding: 8px;
-  border-radius: 4px;
-  background: #fff;
-}
-.var-header {
-  display: flex;
+  align-items: flex-end;
   justify-content: space-between;
-  font-weight: bold;
-  margin-bottom: 6px;
+  gap: 24px;
+  flex-wrap: wrap;
 }
-.badge-state {
-  font-size: 0.75em;
-  background: #007acc;
-  color: #fff;
-  padding: 2px 6px;
-  border-radius: 3px;
+
+.app-title h1 {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
-.var-inputs {
+
+.app-title p {
+  margin: 4px 0 0;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+
+.mode-toggles {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 0.85em;
+  gap: 20px;
+  flex-wrap: wrap;
 }
-.var-inputs input {
-  width: 100%;
-  padding: 4px;
-  margin-top: 2px;
-}
-.btn-apply {
-  margin-top: 10px;
-  padding: 8px;
-  background: #28a745;
-  color: white;
-  border: none;
-  border-radius: 4px;
+
+.switch {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding-left: 34px;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
   cursor: pointer;
+  user-select: none;
 }
-.btn-apply:disabled {
-  background: #ccc;
-  cursor: not-allowed;
+
+.switch input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
 }
-.empty-state {
-  color: #666;
-  font-style: italic;
-  font-size: 0.9em;
+
+.switch-track {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 28px;
+  height: 16px;
+  transform: translateY(-50%);
+  background: var(--color-border-strong);
+  border-radius: 999px;
+  transition: background 0.15s ease;
 }
-textarea {
-  flex: 1;
-  background: #f4f4f4;
-  border: 1px solid #ccc;
-  padding: 10px;
-  font-family: monospace;
-  font-size: 14px;
-  white-space: pre;
-  overflow: auto;
+
+.switch-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.15s ease;
 }
-.preview-pane {
-  height: 80px;
-  background: white;
-  border-bottom: 2px solid #ddd;
+
+.switch input:checked + .switch-track {
+  background: var(--color-accent);
+}
+
+.switch input:checked + .switch-track::after {
+  transform: translateX(12px);
+}
+
+.switch input:focus-visible + .switch-track {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* --- Equation preview / diagnostics band --- */
+
+.preview-band {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.3em;
+  min-height: 88px;
+  padding: 12px 20px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
 }
+
+.preview-pane {
+  width: 100%;
+  text-align: center;
+  font-size: 1.15em;
+}
+
 .error-banner {
-  background-color: #ffebee;
-  color: #c62828;
-  padding: 10px;
-  font-family: monospace;
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--color-error-bg);
+  border: 1px solid var(--color-error-border);
+  border-radius: 4px;
+  color: var(--color-error-fg);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+.error-line {
+  padding: 2px 0;
+}
+
+.error-loc {
+  display: inline-block;
+  min-width: 68px;
+  font-weight: 600;
+}
+
+/* --- Workspace: editor / variables / xml, left to right --- */
+
+.workspace {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 16px;
+  min-height: 0;
+}
+
+.workspace.is-managed {
+  grid-template-columns: 1.2fr 0.9fr 1fr;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.panel-header {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.panel-header h2 {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+/* --- Variable management pane --- */
+
+.variable-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  overflow-y: auto;
+}
+
+.component-group {
+  padding: 10px 12px;
+  background: var(--color-surface-sunken);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+}
+
+.component-title {
+  margin-bottom: 8px;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.variable-row {
+  padding: 10px 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.variable-row:first-of-type {
+  padding-top: 0;
+  border-top: none;
+}
+
+.var-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.var-name {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.badge-group {
+  display: flex;
+  gap: 6px;
+}
+
+.badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.badge-state {
+  background: var(--color-state-bg);
+  color: var(--color-state-fg);
+}
+
+.badge-init {
+  background: var(--color-init-bg);
+  color: var(--color-init-fg);
+}
+
+.badge-ref {
+  background: var(--color-ref-bg);
+  color: var(--color-ref-fg);
+}
+
+.var-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.var-inputs label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+}
+
+.var-inputs input {
+  padding: 6px 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+.var-inputs input:focus-visible {
+  border-color: var(--color-accent);
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.btn-apply {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 8px 16px;
+  background: var(--color-accent);
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.btn-apply:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+}
+
+.btn-apply:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.btn-apply:disabled {
+  background: var(--color-border-strong);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+/* --- XML output --- */
+
+.xml-output {
+  flex: 1;
+  margin: 0;
+  padding: 14px;
+  background: var(--color-surface-sunken);
+  border: none;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+  resize: none;
+}
+
+@media (max-width: 960px) {
+  .app-shell {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .workspace,
+  .workspace.is-managed {
+    grid-template-columns: 1fr;
+  }
+
+  .panel {
+    min-height: 360px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch-track,
+  .switch-track::after,
+  .btn-apply {
+    transition: none;
+  }
 }
 </style>
