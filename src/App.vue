@@ -7,8 +7,8 @@
       </div>
 
       <div class="mode-toggles">
-        <label class="switch">
-          <input type="checkbox" v-model="isSimplified" />
+        <label class="switch" :title="isManaged ? 'External variable management requires simplified view' : ''">
+          <input type="checkbox" v-model="isSimplified" :disabled="isManaged" />
           <span class="switch-track"></span>
           Simplified view
         </label>
@@ -29,7 +29,7 @@
       <div v-else class="preview-pane" ref="latexContainer"></div>
     </section>
 
-    <section class="workspace" :class="{ 'is-managed': isManaged }">
+    <section class="workspace" :class="{ 'is-managed': managedActive }">
       <div class="panel">
         <div class="panel-header">
           <h2>CellML text</h2>
@@ -48,7 +48,7 @@
       </div>
 
       <!-- External Variable Management Pane -->
-      <div v-if="isManaged" class="panel variable-panel">
+      <div v-if="managedActive" class="panel variable-panel">
         <div class="panel-header">
           <h2>Referenced variables</h2>
           <div class="resolution-status" :class="{ 'is-complete': hasValidUnits }">
@@ -167,6 +167,12 @@ const extensions = [sublime, cellml()]
 const isSimplified = ref(false)
 const isManaged = ref(false)
 const variableUnits = ref<Record<string, string>>({})
+
+const managedActive = computed(() => isManaged.value && isSimplified.value)
+
+watch(isManaged, (managed) => {
+  if (managed) isSimplified.value = true
+})
 
 // Sample CellML 2.0 XML to start with
 const xmlInput = ref(`<?xml version="1.0" encoding="UTF-8"?>
@@ -297,7 +303,6 @@ const testXmlInput03 = `
 
 const textOutput = ref('')
 
-const generator = new CellMLTextGenerator()
 const parser = new CellMLTextParser()
 const latexGen = new CellMLLatexGenerator()
 
@@ -305,7 +310,6 @@ const isUpdatingFromXml = ref(false)
 let textDebouncer: any = null
 let managedVarDebouncer: any = null
 const cursorLine = ref(1)
-const latexPreview = ref('')
 const latexContainer = ref<HTMLElement | null>(null)
 let currentDoc: Document | null = null
 const errors = ref<ParserError[]>([])
@@ -313,19 +317,15 @@ const errors = ref<ParserError[]>([])
 // Reactive State for External Management
 const componentGroups = ref<ComponentGroup[]>([])
 const requiredVariables = ref<string[]>([])
-const stateVars = ref<string[]>([])
-const unitDeclarations = ref<Record<string, string>>({})
 const initialDeclarations = ref<Record<string, string>>({})
 const interfaceDeclarations = ref<Record<string, string>>({})
 
-// A VariableResolver backed directly by this component's own ref state, so the "Apply Unit
-// Declarations" panel is just a UI on top of the same resolution contract a real backend
-// resolver would implement.
 const liveResolver: VariableResolver = {
   async resolveVariables(request: VariableResolutionRequest): Promise<VariableResolutionResult> {
     const resolved: VariableResolutionResult['resolved'] = []
     const unresolved: string[] = []
     const handled = new Set<string>()
+
     for (const stateName of request.stateVariableNames) {
       const stateKey = getVarKey(request.componentName, stateName)
       const companionName = initialDeclarations.value[stateKey]?.trim()
@@ -398,12 +398,16 @@ async function syncManagedXml(sourceText: string) {
       isUpdatingFromXml.value = true
       currentDoc = currentParser.doc
 
-      if (isManaged.value) {
+      if (managedActive.value) {
         updateVariableAnalysis()
 
         await resolveManagedVariables(currentDoc, liveResolver)
-        xmlInput.value =
+        const resolvedXml =
           '<?xml version="1.0" encoding="UTF-8"?>\n' + currentParser.serialize(currentDoc.documentElement)
+        xmlInput.value = resolvedXml
+
+        const currentGen = new CellMLTextGenerator({ simplified: isSimplified.value, managed: managedActive.value })
+        textOutput.value = currentGen.generate(resolvedXml)
       } else {
         xmlInput.value = result.xml
       }
@@ -474,9 +478,9 @@ const updatePreview = () => {
 // Regenerate text whenever XML changes
 watch(
   [xmlInput, isSimplified, isManaged],
-  ([newXml, simplified, managed]) => {
+  ([newXml, simplified]) => {
     if (isUpdatingFromXml.value) return
-    const currentGen = new CellMLTextGenerator({ simplified, managed })
+    const currentGen = new CellMLTextGenerator({ simplified, managed: managedActive.value })
     textOutput.value = currentGen.generate(newXml)
   },
   { immediate: true }
@@ -495,7 +499,7 @@ watch(
 watch(
   [variableUnits, initialDeclarations, interfaceDeclarations],
   () => {
-    if (!isManaged.value || isUpdatingFromXml.value) return
+    if (!managedActive.value || isUpdatingFromXml.value) return
 
     if (managedVarDebouncer) clearTimeout(managedVarDebouncer)
     managedVarDebouncer = setTimeout(() => syncManagedXml(textOutput.value), 500)
@@ -524,7 +528,7 @@ onMounted(async () => {
   const currentModule = Object.keys(cellmlModules)[currentIndex] || ''
   console.log(`Loading CellML module: ${currentModule} [${currentIndex}/${Object.keys(cellmlModules).length}]`)
   const cellMLModelString = cellmlModules[currentModule]?.default
-  //xmlInput.value = updateCellMLModel(cellMLModelString)
+  // xmlInput.value = updateCellMLModel(cellMLModelString)
   xmlInput.value = testXmlInput02
   parser.parse(textOutput.value)
   currentDoc = parser.doc
@@ -610,6 +614,11 @@ onMounted(async () => {
   color: var(--color-text-muted);
   cursor: pointer;
   user-select: none;
+}
+
+.switch:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .switch input {
