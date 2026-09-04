@@ -6,6 +6,7 @@ const MATHML_NS = 'http://www.w3.org/1998/Math/MathML'
 export interface ParserOptions {
   sourceLineAttribute?: string | null
   simplified?: boolean | false
+  modelName?: string
 }
 
 export interface ParserError {
@@ -23,11 +24,13 @@ export class CellMLTextParser {
   private _doc!: XMLDocument
   private sourceLineAttr: string | null
   private simplified: boolean
+  private modelName: string
 
   constructor(options: ParserOptions = {}) {
     this.sourceLineAttr =
       options.sourceLineAttribute === undefined ? 'data-source-location' : options.sourceLineAttribute
     this.simplified = options.simplified ?? false
+    this.modelName = options.modelName ?? 'model'
   }
 
   /** The XML document built by the most recent parse() call. Useful for feeding into resolveManagedVariables(). */
@@ -43,7 +46,9 @@ export class CellMLTextParser {
       const root = this.doc.documentElement
 
       if (this.simplified && this.scanner.token !== TokenType.KwDef) {
-        root.setAttribute('name', 'implicit_model')
+        if (!root.hasAttribute('name')) {
+          root.setAttribute('name', this.modelName)
+        }
 
         let defaultComp: Element | null = null
         const getDefaultComp = () => {

@@ -131,7 +131,7 @@
 
 <script setup lang="ts">
 // @ts-ignore
-import { inject, nextTick, onMounted, ref, watch, computed } from 'vue'
+import { inject, onMounted, ref, watch, computed } from 'vue'
 import { Codemirror } from 'vue-codemirror'
 import { sublime } from '@uiw/codemirror-theme-sublime'
 import katex from 'katex'
@@ -391,7 +391,8 @@ const updateVariableAnalysis = () => {
 
 async function syncManagedXml(sourceText: string) {
   try {
-    const currentParser = new CellMLTextParser({ simplified: isSimplified.value })
+    const existingModelName = currentDoc?.documentElement.getAttribute('name') || undefined
+    const currentParser = new CellMLTextParser({ simplified: isSimplified.value, modelName: existingModelName })
     const result = currentParser.parse(sourceText)
 
     if (result.errors.length === 0 && result.xml) {
@@ -405,9 +406,6 @@ async function syncManagedXml(sourceText: string) {
         const resolvedXml =
           '<?xml version="1.0" encoding="UTF-8"?>\n' + currentParser.serialize(currentDoc.documentElement)
         xmlInput.value = resolvedXml
-
-        const currentGen = new CellMLTextGenerator({ simplified: isSimplified.value, managed: managedActive.value })
-        textOutput.value = currentGen.generate(resolvedXml)
       } else {
         xmlInput.value = result.xml
       }
