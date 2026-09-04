@@ -1,45 +1,63 @@
 import { parser } from '../grammar/parser'
 import { cellmlHighlight } from '../grammar/highlight'
-import { LRLanguage, LanguageSupport, foldNodeProp, foldInside, indentNodeProp } from '@codemirror/language'
+import {
+  LRLanguage,
+  LanguageSupport,
+  foldNodeProp,
+  foldInside,
+  indentNodeProp,
+  delimitedIndent,
+  indentUnit,
+} from '@codemirror/language'
 
-// import { styleTags, tags as t } from '@lezer/highlight'
-//
-// Configure the Parser with Metadata
-// We attach the highlight styles and code folding logic here
+const enddefBlockIndent = (context: any) => {
+  const baseIndent = context.column(context.node.from)
+  const lineText = context.textAfter.trim()
+  if (/^enddef(;)?/.test(lineText)) return baseIndent
+  return baseIndent + context.unit
+}
+
 const cellmlParser = parser.configure({
   props: [
-    // Attach your highlighting rules
     cellmlHighlight,
 
-    // Add code folding for blocks (optional but recommended)
     foldNodeProp.add({
-      'Definition Unit': foldInside,
+      Definition: foldInside,
+      SimpleComponent: foldInside,
+      Model: foldInside,
+      Units: foldInside,
+      Annotations: foldInside,
     }),
 
-    // Add auto-indentation logic for blocks.
     indentNodeProp.add({
-      'Definition Unit': (context: any) => {
+      SimpleComponent: (context) => {
         const baseIndent = context.column(context.node.from)
         const lineText = context.textAfter.trim()
-        if (lineText.startsWith('enddef;')) {
+        if (lineText.startsWith('}')) {
           return baseIndent
         }
         return baseIndent + context.unit
       },
+
+      Definition: enddefBlockIndent,
+      Model: enddefBlockIndent,
+      Units: delimitedIndent({ closing: '}' }),
+      Annotations: delimitedIndent({ closing: '}' }),
+      ParenExpression: delimitedIndent({ closing: ')' }),
     }),
   ],
 })
 
-// Define the Language
 export const cellmlLanguage = LRLanguage.define({
   parser: cellmlParser,
   languageData: {
     commentTokens: { line: '//' },
-    indentOnInput: /^\s*enddef;$/, // Helps with auto-indenting when typing 'enddef'
+    indentOnInput: /^\s*(enddef;?|\})$/,
   },
 })
 
-// 3. Export the Extension Function
 export function cellml() {
-  return new LanguageSupport(cellmlLanguage)
+  return new LanguageSupport(cellmlLanguage, [
+    indentUnit.of('  '), // Forces 1 indentation step to strictly equal 2 spaces
+  ])
 }

@@ -131,7 +131,7 @@
 
 <script setup lang="ts">
 // @ts-ignore
-import { inject, nextTick, onMounted, ref, watch, computed } from 'vue'
+import { inject, onMounted, ref, watch, computed } from 'vue'
 import { Codemirror } from 'vue-codemirror'
 import { sublime } from '@uiw/codemirror-theme-sublime'
 import katex from 'katex'

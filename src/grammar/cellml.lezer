@@ -9,6 +9,7 @@
 
 expression {
   Definition |
+  SimpleComponent |
   VariableDeclaration |
   OdeEquation |
   Equation |
@@ -63,13 +64,17 @@ ArgList {
 
 // 5. Inline Unit Annotations
 UnitAnnotation {
-  "{" UnitAnnotationLabel { kw<"units"> } ":" UnitValue { identifier } "}"
+  "{" UnitValue { identifier } "}"
 }
 
 // --- STRUCTURES ---
 
 Definition {
   kw<"def"> kw<"comp"> ComponentName { identifier } kw<"as"> expression* kw<"enddef">
+}
+
+SimpleComponent {
+  kw<"comp"> ComponentName { identifier } "{" expression* "}"
 }
 
 VariableDeclaration {

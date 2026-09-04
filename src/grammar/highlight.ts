@@ -13,7 +13,6 @@ export const cellmlHighlight = styleTags({
 
   UnitName: t.atom, // Teal/cyan - visually distinct
   UnitValue: t.atom,
-  UnitAnnotationLabel: t.propertyName,
 
   AnnotationKey: t.propertyName, // Muted, not as prominent
   AnnotationValue: t.string, // Subdued color for metadata values
