@@ -76,6 +76,47 @@ console.log(latexString); // e.g. "\frac{dV}{dt} = -I_{ion}"
 
 ```
 
+### 4. Simplified vs. Advanced Text
+
+`CellMLTextGenerator` can produce two styles of text, via `simplified`. Advanced writes out every `def model`, `def comp`, and `var` declaration explicitly; simplified reads as short `comp foo { ... }` blocks, and — combined with `managed: true` — hides variable declarations entirely, for cases where they're supplied externally rather than typed by hand.
+
+```typescript
+import { CellMLTextGenerator } from 'cellml-text-editor';
+
+const advanced = new CellMLTextGenerator({ simplified: false });
+const simplified = new CellMLTextGenerator({ simplified: true, managed: true });
+
+```
+
+### 5. Externally Managed Variables
+
+In managed mode, a component's math can reference variables that aren't declared anywhere in the text. `resolveManagedVariables` looks up whatever's missing via a `VariableResolver` you provide, and writes the result onto the parsed XML.
+
+```typescript
+import { CellMLTextParser, resolveManagedVariables, type VariableResolver } from 'cellml-text-editor';
+
+const myResolver: VariableResolver = {
+    async resolveVariables(request) {
+        // request.componentName, request.variableNames, request.stateVariableNames
+        return {
+            resolved: [{ name: 'i_Ion', units: 'microA_per_cm2', interface: 'public' }],
+            unresolved: [],
+        };
+    },
+};
+
+const parser = new CellMLTextParser();
+const { xml, errors } = parser.parse(cellmlTextSource);
+
+if (errors.length === 0) {
+    await resolveManagedVariables(parser.doc, myResolver);
+    const finalXml = '<?xml version="1.0" encoding="UTF-8"?>\n' + parser.serialize(parser.doc.documentElement);
+}
+
+```
+
+Managed mode currently only supports simplified text.
+
 ## Configuration
 
 You can configure the parser to tag the output XML with source line numbers. This is enabled by default to help build editor integrations (like highlighting the source line when clicking a diagram).
