@@ -4,11 +4,6 @@ const CELLML_NS = 'http://www.cellml.org/cellml/2.0#'
 const MATHML_NS = 'http://www.w3.org/1998/Math/MathML'
 
 export interface ParserOptions {
-  /**
-   * The attribute name used to tag MathML elements with their source line number.
-   * Set to null or empty string to disable source tracking in the DOM entirely.
-   * @default "data-source-location"
-   */
   sourceLineAttribute?: string | null
   simplified?: boolean | false
 }
@@ -25,19 +20,24 @@ export interface ParserResult {
 
 export class CellMLTextParser {
   private scanner!: CellMLTextScanner
-  private doc!: XMLDocument
+  private _doc!: XMLDocument
   private sourceLineAttr: string | null
   private simplified: boolean
 
   constructor(options: ParserOptions = {}) {
     this.sourceLineAttr =
       options.sourceLineAttribute === undefined ? 'data-source-location' : options.sourceLineAttribute
-    this.simplified = options.simplified ?? true
+    this.simplified = options.simplified ?? false
+  }
+
+  /** The XML document built by the most recent parse() call. Useful for feeding into resolveManagedVariables(). */
+  public get doc(): XMLDocument {
+    return this._doc
   }
 
   public parse(text: string): ParserResult {
     this.scanner = new CellMLTextScanner(text)
-    this.doc = document.implementation.createDocument(CELLML_NS, 'model', null)
+    this._doc = document.implementation.createDocument(CELLML_NS, 'model', null)
 
     try {
       const root = this.doc.documentElement
@@ -86,9 +86,10 @@ export class CellMLTextParser {
           }
         }
 
-        this.expect(TokenType.KwEndDef) // enddef
-        this.expect(TokenType.SemiColon) // ; (optional in some grammars, but strict in C++)
+        this.expect(TokenType.KwEndDef)
+        this.expect(TokenType.SemiColon)
       }
+
       return { xml: '<?xml version="1.0" encoding="UTF-8"?>\n' + this.serialize(root), errors: [] }
     } catch (e: any) {
       return { xml: null, errors: [{ line: this.scanner.getLine(), message: e.message || 'Unknown parsing error' }] }
@@ -98,6 +99,7 @@ export class CellMLTextParser {
   private parseSimpleComponentBlock(parent: Element) {
     this.expect(TokenType.KwComp)
     const name = this.expectValue(TokenType.Identifier)
+
     this.expect(TokenType.LBrace) // Expect {
 
     const comp = this.doc.createElementNS(CELLML_NS, 'component')
@@ -631,7 +633,13 @@ export class CellMLTextParser {
     return null
   }
 
-  private serialize(node: Element, level: number = 0): string {
+  /**
+   * Serializes a node back to CellML-flavoured XML text using this parser's formatting rules
+   * (indentation, namespace handling, source-location stripping). Public so callers can
+   * re-serialize after mutating the document externally — e.g. after resolveManagedVariables()
+   * writes resolved variables onto the DOM.
+   */
+  public serialize(node: Element, level: number = 0): string {
     const indent = '  '.repeat(level)
     const tagName = node.tagName
     const localName = node.localName
