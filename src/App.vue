@@ -405,9 +405,6 @@ async function syncManagedXml(sourceText: string) {
         const resolvedXml =
           '<?xml version="1.0" encoding="UTF-8"?>\n' + currentParser.serialize(currentDoc.documentElement)
         xmlInput.value = resolvedXml
-
-        const currentGen = new CellMLTextGenerator({ simplified: isSimplified.value, managed: managedActive.value })
-        textOutput.value = currentGen.generate(resolvedXml)
       } else {
         xmlInput.value = result.xml
       }
