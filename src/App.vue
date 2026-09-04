@@ -391,7 +391,8 @@ const updateVariableAnalysis = () => {
 
 async function syncManagedXml(sourceText: string) {
   try {
-    const currentParser = new CellMLTextParser({ simplified: isSimplified.value })
+    const existingModelName = currentDoc?.documentElement.getAttribute('name') || undefined
+    const currentParser = new CellMLTextParser({ simplified: isSimplified.value, modelName: existingModelName })
     const result = currentParser.parse(sourceText)
 
     if (result.errors.length === 0 && result.xml) {
