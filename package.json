@@ -15,8 +15,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hsorby/cellml-text-editor.js.git"
+    "url": "git+https://github.com/physiomelinks/cellml-text-editor.js.git"
   },
+  "contributors": [
+    {
+      "name": "Jarrah Dowrick"
+    }
+  ],
   "license": "Apache-2.0",
   "type": "module",
   "files": [
