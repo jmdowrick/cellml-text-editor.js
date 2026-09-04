@@ -51,6 +51,13 @@
       <div v-if="isManaged" class="panel variable-panel">
         <div class="panel-header">
           <h2>Referenced variables</h2>
+          <div class="resolution-status" :class="{ 'is-complete': hasValidUnits }">
+            {{
+              hasValidUnits
+                ? 'All referenced variables have units.'
+                : `${requiredVariables.length} variable(s) still need units.`
+            }}
+          </div>
         </div>
 
         <div class="variable-list">
@@ -109,14 +116,6 @@
               </div>
             </div>
           </div>
-
-          <button
-            class="btn-apply"
-            @click="applyDeclarations"
-            :disabled="!hasValidUnits"
-          >
-            Apply unit declarations
-          </button>
         </div>
       </div>
 
@@ -303,7 +302,8 @@ const parser = new CellMLTextParser()
 const latexGen = new CellMLLatexGenerator()
 
 const isUpdatingFromXml = ref(false)
-let debouncer: any = null
+let textDebouncer: any = null
+let managedVarDebouncer: any = null
 const cursorLine = ref(1)
 const latexPreview = ref('')
 const latexContainer = ref<HTMLElement | null>(null)
@@ -325,8 +325,21 @@ const liveResolver: VariableResolver = {
   async resolveVariables(request: VariableResolutionRequest): Promise<VariableResolutionResult> {
     const resolved: VariableResolutionResult['resolved'] = []
     const unresolved: string[] = []
+    const handled = new Set<string>()
+    for (const stateName of request.stateVariableNames) {
+      const stateKey = getVarKey(request.componentName, stateName)
+      const companionName = initialDeclarations.value[stateKey]?.trim()
+      const stateUnits = variableUnits.value[stateKey]
+
+      if (companionName && stateUnits && !handled.has(companionName)) {
+        resolved.push({ name: companionName, units: stateUnits, interface: 'public' })
+        handled.add(companionName)
+      }
+    }
 
     for (const name of request.variableNames) {
+      if (handled.has(name)) continue
+
       const key = getVarKey(request.componentName, name)
       const units = variableUnits.value[key]
 
@@ -341,6 +354,7 @@ const liveResolver: VariableResolver = {
         initialValue: initialDeclarations.value[key] || undefined,
         interface: (interfaceDeclarations.value[key] as VariableInterface) || 'public',
       })
+      handled.add(name)
     }
 
     return { resolved, unresolved }
@@ -358,26 +372,49 @@ const updateVariableAnalysis = () => {
 
   // Units already present in the XML seed the inputs; anything the user has already typed wins.
   variableUnits.value = { ...existingUnits, ...variableUnits.value }
+
+  // State variables default to a "<name>_init" companion; the user can still override it.
+  const seededInitialDeclarations = { ...initialDeclarations.value }
+  groups.forEach((group) => {
+    group.stateVariables.forEach((varName) => {
+      const key = getVarKey(group.componentName, varName)
+      if (!seededInitialDeclarations[key]?.trim()) {
+        seededInitialDeclarations[key] = `${varName}_init`
+      }
+    })
+  })
+  initialDeclarations.value = seededInitialDeclarations
+
   componentGroups.value = groups
   requiredVariables.value = reqVars
 }
 
-async function applyDeclarations() {
-  const currentParser = new CellMLTextParser({ simplified: isSimplified.value })
+async function syncManagedXml(sourceText: string) {
+  try {
+    const currentParser = new CellMLTextParser({ simplified: isSimplified.value })
+    const result = currentParser.parse(sourceText)
 
-  const result = currentParser.parse(textOutput.value)
-  if (result.errors.length === 0 && result.xml) {
-    currentDoc = currentParser.doc
+    if (result.errors.length === 0 && result.xml) {
+      isUpdatingFromXml.value = true
+      currentDoc = currentParser.doc
 
-    if (isManaged.value) {
-      await resolveManagedVariables(currentDoc, liveResolver)
-      xmlInput.value =
-        '<?xml version="1.0" encoding="UTF-8"?>\n' + currentParser.serialize(currentDoc.documentElement)
-    } else {
-      xmlInput.value = result.xml
+      if (isManaged.value) {
+        updateVariableAnalysis()
+
+        await resolveManagedVariables(currentDoc, liveResolver)
+        xmlInput.value =
+          '<?xml version="1.0" encoding="UTF-8"?>\n' + currentParser.serialize(currentDoc.documentElement)
+      } else {
+        xmlInput.value = result.xml
+      }
+
+      updateVariableAnalysis()
+
+      setTimeout(() => (isUpdatingFromXml.value = false), 50)
     }
-
-    updateVariableAnalysis()
+  } catch (e) {
+    // Don't update XML while user is typing invalid syntax
+    // console.log('Parsing error (expected while typing):', e.message)
   }
 }
 
@@ -447,37 +484,23 @@ watch(
 
 watch(
   [textOutput, isSimplified, isManaged],
-  ([newVal, simplified, managed]) => {
+  ([newVal]) => {
     if (isUpdatingFromXml.value) return
 
-    if (debouncer) clearTimeout(debouncer)
-    debouncer = setTimeout(async () => {
-      try {
-        const currentParser = new CellMLTextParser({ simplified: isSimplified.value })
-        const result = currentParser.parse(newVal)
-
-        if (result.errors.length === 0 && result.xml) {
-          isUpdatingFromXml.value = true
-          currentDoc = currentParser.doc
-
-          if (isManaged.value) {
-            await resolveManagedVariables(currentDoc, liveResolver)
-            xmlInput.value =
-              '<?xml version="1.0" encoding="UTF-8"?>\n' + currentParser.serialize(currentDoc.documentElement)
-          } else {
-            xmlInput.value = result.xml
-          }
-
-          updateVariableAnalysis()
-
-          setTimeout(() => (isUpdatingFromXml.value = false), 50)
-        }
-      } catch (e) {
-        // Don't update XML while user is typing invalid syntax
-        // console.log('Parsing error (expected while typing):', e.message)
-      }
-    }, 500)
+    if (textDebouncer) clearTimeout(textDebouncer)
+    textDebouncer = setTimeout(() => syncManagedXml(newVal), 500)
   }
+)
+
+watch(
+  [variableUnits, initialDeclarations, interfaceDeclarations],
+  () => {
+    if (!isManaged.value || isUpdatingFromXml.value) return
+
+    if (managedVarDebouncer) clearTimeout(managedVarDebouncer)
+    managedVarDebouncer = setTimeout(() => syncManagedXml(textOutput.value), 500)
+  },
+  { deep: true }
 )
 
 function listAvailableModules() {
@@ -501,8 +524,8 @@ onMounted(async () => {
   const currentModule = Object.keys(cellmlModules)[currentIndex] || ''
   console.log(`Loading CellML module: ${currentModule} [${currentIndex}/${Object.keys(cellmlModules).length}]`)
   const cellMLModelString = cellmlModules[currentModule]?.default
-  xmlInput.value = updateCellMLModel(cellMLModelString)
-  // xmlInput.value = testXmlInput03
+  //xmlInput.value = updateCellMLModel(cellMLModelString)
+  xmlInput.value = testXmlInput02
   parser.parse(textOutput.value)
   currentDoc = parser.doc
   updateVariableAnalysis()
@@ -531,6 +554,10 @@ onMounted(async () => {
   --color-error-bg: #fbeaea;
   --color-error-fg: #8a1f1f;
   --color-error-border: #e4b8b8;
+  --color-pending-bg: #edeff2;
+  --color-pending-fg: #5b6572;
+  --color-success-bg: #e5f3ea;
+  --color-success-fg: #1c7a41;
   --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
 
@@ -812,33 +839,21 @@ onMounted(async () => {
   outline-offset: 1px;
 }
 
-.btn-apply {
+.resolution-status {
   align-self: flex-start;
   margin-top: 4px;
-  padding: 8px 16px;
-  background: var(--color-accent);
-  border: none;
-  border-radius: 4px;
-  color: #fff;
-  font-size: 0.8125rem;
+  padding: 4px 10px;
+  background: var(--color-pending-bg);
+  border-radius: 999px;
+  color: var(--color-pending-fg);
+  font-size: 0.75rem;
   font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
-.btn-apply:hover:not(:disabled) {
-  background: var(--color-accent-hover);
-}
-
-.btn-apply:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: 2px;
-}
-
-.btn-apply:disabled {
-  background: var(--color-border-strong);
-  color: var(--color-text-muted);
-  cursor: not-allowed;
+.resolution-status.is-complete {
+  background: var(--color-success-bg);
+  color: var(--color-success-fg);
 }
 
 /* --- XML output --- */
@@ -877,7 +892,7 @@ onMounted(async () => {
 @media (prefers-reduced-motion: reduce) {
   .switch-track,
   .switch-track::after,
-  .btn-apply {
+  .resolution-status {
     transition: none;
   }
 }

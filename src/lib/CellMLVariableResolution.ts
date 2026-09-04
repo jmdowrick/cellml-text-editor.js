@@ -221,10 +221,14 @@ export function buildResolutionRequest(
   componentName: string,
   analysis: ComponentVariableAnalysis,
 ): VariableResolutionRequest {
+  // Companions (e.g. "V_init") usually aren't referenced anywhere in the math itself — they're
+  // only pointed at via another variable's initial_value attribute — so `analysis.variables`
+  // alone would never ask the resolver about them. Fold them in explicitly.
+
   return {
     modelName,
     componentName,
-    variableNames: analysis.variables,
+    variableNames,
     stateVariableNames: analysis.stateVariables,
   }
 }
