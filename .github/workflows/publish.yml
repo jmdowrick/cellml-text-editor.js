@@ -7,7 +7,7 @@ on:
 
 jobs:
   publish:
-    if: github.repository == 'hsorby/cellml-text-editor.js'
+    if: github.repository == 'physiomelinks/cellml-text-editor.js'
     runs-on: ubuntu-latest
     permissions:
       id-token: write # for --provenance
