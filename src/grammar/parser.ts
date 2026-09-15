@@ -13,6 +13,6 @@ export const parser = LRParser.deserialize({
   tokenData: "%t~RdXY!aYZ!a]^!apq!axy!ryz!wz{!|{|#R|}#W}!O#]!P!Q#b!Q![#g![!]$x!]!^$}!_!`%S!c!}%X#R#S%X#T#o%X#o#p%j#q#r%o~!fS#T~XY!aYZ!a]^!apq!a~!wOj~~!|Ok~~#RO#W~~#WO#Y~~#]Of~~#bO#Z~~#gO#X~~#lSe~!O!P#x!Q![#g!g!h$^#X#Y$^~#{P!Q![$O~$TRe~!Q![$O!g!h$^#X#Y$^~$aR{|$j}!O$j!Q![$p~$mP!Q![$p~$uPe~!Q![$p~$}O_~~%SOg~~%XOm~~%^S#V~!Q![%X!c!}%X#R#S%X#T#o%X~%oOY~~%tOZ~",
   tokenizers: [0],
   topRules: {"Program":[0,1]},
-  specialized: [{term: 99, get: (value) => spec_identifier[value] || -1}],
+  specialized: [{term: 99, get: (value: keyof typeof spec_identifier) => spec_identifier[value] || -1}],
   tokenPrec: 0
 })

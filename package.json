@@ -46,7 +46,7 @@
     "preview": "vite preview",
     "build:only": "vite build",
     "type:check": "vue-tsc --build",
-    "build:grammar": "lezer-generator src/grammar/cellml.lezer -o src/grammar/parser.ts && echo '// @ts-nocheck' | cat - src/grammar/parser.ts > temp && mv temp src/grammar/parser.ts"
+    "build:grammar": "lezer-generator --typeScript src/grammar/cellml.lezer -o src/grammar/parser.ts"
   },
   "devDependencies": {
     "@babel/runtime": "^7.28.6",
