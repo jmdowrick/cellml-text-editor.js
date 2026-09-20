@@ -7,18 +7,35 @@
       </div>
 
       <div class="mode-toggles">
-        <label class="switch" :title="isManaged ? 'External variable management requires simplified view' : ''">
-          <input type="checkbox" v-model="isSimplified" :disabled="isManaged" />
+        <label
+          class="switch"
+          title="Simple mode: equations only. The model name is kept from the XML, the component name is set below, and variables are declared from the panel."
+        >
+          <input type="checkbox" v-model="isSimple" />
           <span class="switch-track"></span>
-          Simplified view
-        </label>
-        <label class="switch">
-          <input type="checkbox" v-model="isManaged" />
-          <span class="switch-track"></span>
-          External variable management
+          Simple mode
         </label>
       </div>
     </header>
+
+    <section class="model-bar">
+      <div class="model-field">
+        <span class="model-label">Model</span>
+        <span class="model-value" title="Read from the XML. Simple mode never changes it.">{{ modelName || '—' }}</span>
+      </div>
+      <label class="model-field">
+        <span class="model-label">Component</span>
+        <input
+          class="model-input"
+          type="text"
+          spellcheck="false"
+          :value="componentName"
+          :disabled="!isSimple"
+          :title="isSimple ? 'Renames the component' : 'Advanced mode: the text names the component (def comp ... as)'"
+          @change="session.setComponentName(valueOf($event))"
+        />
+      </label>
+    </section>
 
     <section class="preview-band">
       <div v-if="errors.length > 0" class="error-banner">
@@ -29,7 +46,7 @@
       <div v-else class="preview-pane" ref="latexContainer"></div>
     </section>
 
-    <section class="workspace" :class="{ 'is-managed': managedActive }">
+    <section class="workspace" :class="{ 'is-managed': editable }">
       <div class="panel">
         <div class="panel-header">
           <h2>CellML text</h2>
@@ -48,69 +65,54 @@
       </div>
 
       <!-- External Variable Management Pane -->
-      <div v-if="managedActive" class="panel variable-panel">
+      <div v-if="editable" class="panel variable-panel">
         <div class="panel-header">
           <h2>Referenced variables</h2>
-          <div class="resolution-status" :class="{ 'is-complete': hasValidUnits }">
-            {{
-              hasValidUnits
-                ? 'All referenced variables have units.'
-                : `${requiredVariables.length} variable(s) still need units.`
-            }}
+          <div class="resolution-status" :class="{ 'is-complete': isComplete }">
+            {{ isComplete ? 'All referenced variables have units.' : `${missingCount} variable(s) still need units.` }}
           </div>
         </div>
 
         <div class="variable-list">
-          <div
-            v-for="group in componentGroups"
-            :key="group.componentName"
-            class="component-group"
-          >
+          <div v-for="group in components" :key="group.componentName" class="component-group">
             <div class="component-title">{{ group.componentName }}</div>
 
-            <div
-              v-for="varName in group.variables"
-              :key="varName"
-              class="variable-row"
-            >
+            <div v-for="v in group.variables" :key="v.key" class="variable-row">
               <div class="var-header">
-                <span class="var-name">{{ varName }}</span>
+                <span class="var-name">{{ v.name }}</span>
 
-                <!-- Metadata Role Badges -->
                 <div class="badge-group">
-                  <span v-if="group.stateVariables.includes(varName)" class="badge badge-state">
-                    ODE state
-                  </span>
-                  <span v-if="group.initialVariables.includes(varName)" class="badge badge-init">
-                    Initializer
-                  </span>
-                  <span
-                    v-if="!group.stateVariables.includes(varName) && !group.initialVariables.includes(varName)"
-                    class="badge badge-ref"
-                  >
-                    External ref
-                  </span>
+                  <span v-if="v.role === 'state'" class="badge badge-state">ODE state</span>
+                  <span v-else-if="v.role === 'initializer'" class="badge badge-init">Initializer</span>
+                  <span v-else class="badge badge-ref">External ref</span>
                 </div>
               </div>
 
               <div class="var-inputs">
-                <label>
+                <div v-if="v.role === 'initializer'" class="var-inherited">
+                  <span>Units</span>
+                  <span class="var-inherited-value">{{ v.units || '—' }}</span>
+                  <span class="var-inherited-note">same as {{ v.unitsFrom }}</span>
+                </div>
+
+                <label v-else>
                   <span>Units</span>
                   <input
-                    :id="getVarKey(group.componentName, varName)"
+                    :id="v.key"
                     type="text"
-                    v-model="variableUnits[getVarKey(group.componentName, varName)]"
+                    :value="v.units"
                     placeholder="e.g. millivolt, second"
+                    @input="session.setUnits(v.componentName, v.name, valueOf($event))"
                   />
                 </label>
 
-                <!-- Show companion input if variable requires an initial value declaration -->
-                <label v-if="group.stateVariables.includes(varName)">
-                  <span>Initial value companion</span>
+                <label v-if="v.role === 'state'">
+                  <span>Initial value (number or companion variable)</span>
                   <input
                     type="text"
-                    v-model="initialDeclarations[getVarKey(group.componentName, varName)]"
-                    placeholder="e.g. V_init"
+                    :value="v.initialValue"
+                    placeholder="e.g. -65 or V_init"
+                    @input="session.setInitialValue(v.componentName, v.name, valueOf($event))"
                   />
                 </label>
               </div>
@@ -123,7 +125,7 @@
         <div class="panel-header">
           <h2>CellML 2.0 XML</h2>
         </div>
-        <textarea class="xml-output" spellcheck="false" readonly>{{ xmlInput }}</textarea>
+        <textarea class="xml-output" spellcheck="false" readonly>{{ xmlOutput }}</textarea>
       </div>
     </section>
   </div>
@@ -131,26 +133,14 @@
 
 <script setup lang="ts">
 // @ts-ignore
-import { inject, onMounted, ref, watch, computed } from 'vue'
+import { inject, onMounted, ref, watch, computed, nextTick } from 'vue'
 import { Codemirror } from 'vue-codemirror'
 import { sublime } from '@uiw/codemirror-theme-sublime'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
 
-import { CellMLTextGenerator } from './lib/CellMLTextGenerator'
-import { CellMLTextParser, type ParserError } from './lib/CellMLTextParser'
-import { CellMLLatexGenerator } from './lib/CellMLLatexGenerator'
+import { CellMLModelSession } from './lib/CellMLModelSession'
 import { cellml } from './lib/CellMLLanguage'
-import {
-  buildComponentGroups,
-  resolveManagedVariables,
-  getVariableKey as getVarKey,
-  type ComponentGroup,
-  type VariableInterface,
-  type VariableResolver,
-  type VariableResolutionRequest,
-  type VariableResolutionResult,
-} from './lib/CellMLVariableResolution'
 
 // @ts-ignore
 import { initLibCellML, updateCellMLModel } from './utils/cellml'
@@ -164,18 +154,9 @@ const cellmlModules = import.meta.glob('./assets/cellml/*.cellml', {
 
 const extensions = [sublime, cellml()]
 
-const isSimplified = ref(false)
-const isManaged = ref(false)
-const variableUnits = ref<Record<string, string>>({})
+// --- Sample models --------------------------------------------------------
 
-const managedActive = computed(() => isManaged.value && isSimplified.value)
-
-watch(isManaged, (managed) => {
-  if (managed) isSimplified.value = true
-})
-
-// Sample CellML 2.0 XML to start with
-const xmlInput = ref(`<?xml version="1.0" encoding="UTF-8"?>
+const sampleXml = `<?xml version="1.0" encoding="UTF-8"?>
 <model xmlns="http://www.cellml.org/cellml/2.0#" name="hodgkin_huxley_squid_axon_model_1952">
   <component name="membrane">
     <variable name="V" units="millivolt" initial_value="-65" interface="public"/>
@@ -190,8 +171,7 @@ const xmlInput = ref(`<?xml version="1.0" encoding="UTF-8"?>
       </apply>
     </math>
   </component>
-</model>`)
-
+</model>`
 const testXmlInput02 = `
 <model xmlns="http://www.cellml.org/cellml/2.0#"  name="example_model">
   <component name="example_component">
@@ -257,7 +237,6 @@ const testXmlInput02 = `
   </component>
 </model>
 `
-
 const testXmlInput03 = `
 <model xmlns="http://www.cellml.org/cellml/2.0#"  name="example_model">
   <component name="example_component">
@@ -301,220 +280,95 @@ const testXmlInput03 = `
   </component>
 </model>`
 
-const textOutput = ref('')
 
-const parser = new CellMLTextParser()
-const latexGen = new CellMLLatexGenerator()
+// --- The session owns text, XML, variable metadata, and resolution --------
 
-const isUpdatingFromXml = ref(false)
-let textDebouncer: any = null
-let managedVarDebouncer: any = null
-const cursorLine = ref(1)
-const latexContainer = ref<HTMLElement | null>(null)
-let currentDoc: Document | null = null
-const errors = ref<ParserError[]>([])
+const session = new CellMLModelSession()
 
-// Reactive State for External Management
-const componentGroups = ref<ComponentGroup[]>([])
-const requiredVariables = ref<string[]>([])
-const initialDeclarations = ref<Record<string, string>>({})
-const interfaceDeclarations = ref<Record<string, string>>({})
-
-const liveResolver: VariableResolver = {
-  async resolveVariables(request: VariableResolutionRequest): Promise<VariableResolutionResult> {
-    const resolved: VariableResolutionResult['resolved'] = []
-    const unresolved: string[] = []
-    const handled = new Set<string>()
-
-    for (const stateName of request.stateVariableNames) {
-      const stateKey = getVarKey(request.componentName, stateName)
-      const companionName = initialDeclarations.value[stateKey]?.trim()
-      const stateUnits = variableUnits.value[stateKey]
-
-      if (companionName && stateUnits && !handled.has(companionName)) {
-        resolved.push({ name: companionName, units: stateUnits, interface: 'public' })
-        handled.add(companionName)
-      }
-    }
-
-    for (const name of request.variableNames) {
-      if (handled.has(name)) continue
-
-      const key = getVarKey(request.componentName, name)
-      const units = variableUnits.value[key]
-
-      if (!units?.trim()) {
-        unresolved.push(name)
-        continue
-      }
-
-      resolved.push({
-        name,
-        units,
-        initialValue: initialDeclarations.value[key] || undefined,
-        interface: (interfaceDeclarations.value[key] as VariableInterface) || 'public',
-      })
-      handled.add(name)
-    }
-
-    return { resolved, unresolved }
-  },
+// Vue glue: bump a counter on every session change; computeds read it so they re-run.
+const revision = ref(0)
+let seenTextRevision = -1
+session.subscribe(() => {
+  revision.value++
+  // The session regenerated the text (load / mode switch): push it into the editor.
+  if (session.textRevision !== seenTextRevision) {
+    seenTextRevision = session.textRevision
+    textOutput.value = session.text
+  }
+})
+function snapshot<T>(read: () => T) {
+  return computed(() => {
+    void revision.value
+    return read()
+  })
 }
 
-const hasValidUnits = computed(() => {
-  return requiredVariables.value.every((v) => !!variableUnits.value[v]?.trim())
+const components = snapshot(() => session.components)
+const errors = snapshot(() => session.errors)
+const xmlOutput = snapshot(() => session.xml)
+const isComplete = snapshot(() => session.isComplete)
+const missingCount = snapshot(() => session.missing.length)
+const editable = snapshot(() => session.editable)
+const modelName = snapshot(() => session.modelName)
+const componentName = snapshot(() => session.componentName)
+
+const valueOf = (e: Event) => (e.target as HTMLInputElement).value
+
+// --- Modes ------------------------------------------------------------------
+
+// Simple mode is the managed mode: the text holds equations only, and every variable
+// declaration comes from the panel below.
+const isSimple = ref(false)
+
+watch(isSimple, (simple) => {
+  session.setMode({ simple })
 })
 
-const updateVariableAnalysis = () => {
-  if (!currentDoc) return
+// --- Editor -> session (debounced) ------------------------------------------
 
-  const { groups, requiredVariables: reqVars, existingUnits } = buildComponentGroups(currentDoc)
+const textOutput = ref('')
+let textDebouncer: ReturnType<typeof setTimeout> | null = null
 
-  // Units already present in the XML seed the inputs; anything the user has already typed wins.
-  variableUnits.value = { ...existingUnits, ...variableUnits.value }
+watch(textOutput, (text) => {
+  if (textDebouncer) clearTimeout(textDebouncer)
+  textDebouncer = setTimeout(() => session.setText(text), 500)
+})
 
-  // State variables default to a "<name>_init" companion; the user can still override it.
-  const seededInitialDeclarations = { ...initialDeclarations.value }
-  groups.forEach((group) => {
-    group.stateVariables.forEach((varName) => {
-      const key = getVarKey(group.componentName, varName)
-      if (!seededInitialDeclarations[key]?.trim()) {
-        seededInitialDeclarations[key] = `${varName}_init`
-      }
-    })
-  })
-  initialDeclarations.value = seededInitialDeclarations
+// --- LaTeX preview ----------------------------------------------------------
 
-  componentGroups.value = groups
-  requiredVariables.value = reqVars
-}
+const cursorLine = ref(1)
+const latexContainer = ref<HTMLElement | null>(null)
 
-async function syncManagedXml(sourceText: string) {
-  try {
-    const existingModelName = currentDoc?.documentElement.getAttribute('name') || undefined
-    const currentParser = new CellMLTextParser({ simplified: isSimplified.value, modelName: existingModelName })
-    const result = currentParser.parse(sourceText)
-
-    if (result.errors.length === 0 && result.xml) {
-      isUpdatingFromXml.value = true
-      currentDoc = currentParser.doc
-
-      if (managedActive.value) {
-        updateVariableAnalysis()
-
-        await resolveManagedVariables(currentDoc, liveResolver)
-        const resolvedXml =
-          '<?xml version="1.0" encoding="UTF-8"?>\n' + currentParser.serialize(currentDoc.documentElement)
-        xmlInput.value = resolvedXml
-      } else {
-        xmlInput.value = result.xml
-      }
-
-      updateVariableAnalysis()
-
-      setTimeout(() => (isUpdatingFromXml.value = false), 50)
-    }
-  } catch (e) {
-    // Don't update XML while user is typing invalid syntax
-    // console.log('Parsing error (expected while typing):', e.message)
+const updatePreview = () => {
+  if (!latexContainer.value) return
+  const latex = session.latexAtLine(cursorLine.value)
+  if (latex) {
+    katex.render(latex, latexContainer.value, { throwOnError: false, displayMode: true })
+  } else {
+    latexContainer.value.innerHTML = "<span class='placeholder'>No equation selected</span>"
   }
 }
 
 const handleStateUpdate = (viewUpdate: any) => {
   if (viewUpdate.selectionSet || viewUpdate.docChanged) {
-    const state = viewUpdate.state
-    const pos = state.selection.main.head
-    const line = state.doc.lineAt(pos)
-
-    // Update cursorLine for your LaTeX preview logic
-    cursorLine.value = line.number
+    cursorLine.value = viewUpdate.state.doc.lineAt(viewUpdate.state.selection.main.head).number
     updatePreview()
   }
 }
 
-const updatePreview = () => {
-  if (!currentDoc) return
+// Also refresh when the model changes under a stationary cursor (after a debounced parse, a panel edit, ...).
+watch(revision, () => nextTick(updatePreview))
 
-  // Find the equation that matches this line.
-  // We look for elements with 'data-source-location' at our cursor.
-  const equations = Array.from(currentDoc.getElementsByTagNameNS('*', 'apply')) // get all apply nodes
-
-  // Find the node with the highest line number that is <= cursorLine
-  let bestMatch: Element | null = null
-
-  for (let i = 0; i < equations.length; i++) {
-    const eq = equations[i]
-    if (!eq) continue
-
-    const loc = eq.getAttribute('data-source-location')
-    if (!loc) continue
-
-    const [startStr, endStr] = loc.split('-')
-    const start = parseInt(startStr || '0', 10)
-    const end = endStr ? parseInt(endStr, 10) : start
-
-    // If we've passed the cursor line, we can stop.
-    if (start > cursorLine.value) {
-      break
-    }
-
-    // Check if the cursor is inside the range.
-    if (cursorLine.value >= start && cursorLine.value <= end) {
-      bestMatch = eq
-      break
-    }
-  }
-
-  if (bestMatch && latexContainer.value) {
-    const latex = latexGen.convert(bestMatch)
-    katex.render(latex, latexContainer.value, { throwOnError: false, displayMode: true })
-  } else if (latexContainer.value) {
-    latexContainer.value.innerHTML = "<span class='placeholder'>No equation selected</span>"
-  }
-}
-
-// Regenerate text whenever XML changes
-watch(
-  [xmlInput, isSimplified, isManaged],
-  ([newXml, simplified]) => {
-    if (isUpdatingFromXml.value) return
-    const currentGen = new CellMLTextGenerator({ simplified, managed: managedActive.value })
-    textOutput.value = currentGen.generate(newXml)
-  },
-  { immediate: true }
-)
-
-watch(
-  [textOutput, isSimplified, isManaged],
-  ([newVal]) => {
-    if (isUpdatingFromXml.value) return
-
-    if (textDebouncer) clearTimeout(textDebouncer)
-    textDebouncer = setTimeout(() => syncManagedXml(newVal), 500)
-  }
-)
-
-watch(
-  [variableUnits, initialDeclarations, interfaceDeclarations],
-  () => {
-    if (!managedActive.value || isUpdatingFromXml.value) return
-
-    if (managedVarDebouncer) clearTimeout(managedVarDebouncer)
-    managedVarDebouncer = setTimeout(() => syncManagedXml(textOutput.value), 500)
-  },
-  { deep: true }
-)
+// --- Startup ----------------------------------------------------------------
 
 function listAvailableModules() {
   console.log('Available CellML modules:')
-  let index = 0
-  Object.keys(cellmlModules).forEach((key) => {
-    console.log(`[${index++}] - ${key}`)
-  })
+  Object.keys(cellmlModules).forEach((key, index) => console.log(`[${index}] - ${key}`))
 }
 
+session.setXml(sampleXml)
+
 onMounted(async () => {
-  // Load a sample CellML file from assets on startup
   libcellmlReadyPromise.then((instance) => {
     initLibCellML(instance)
   })
@@ -522,15 +376,9 @@ onMounted(async () => {
 
   listAvailableModules()
 
-  const currentIndex = 23
-  const currentModule = Object.keys(cellmlModules)[currentIndex] || ''
-  console.log(`Loading CellML module: ${currentModule} [${currentIndex}/${Object.keys(cellmlModules).length}]`)
-  const cellMLModelString = cellmlModules[currentModule]?.default
-  // xmlInput.value = updateCellMLModel(cellMLModelString)
-  xmlInput.value = testXmlInput02
-  parser.parse(textOutput.value)
-  currentDoc = parser.doc
-  updateVariableAnalysis()
+  // const cellMLModelString = cellmlModules[Object.keys(cellmlModules)[23] || '']?.default
+  // session.setXml(updateCellMLModel(cellMLModelString))
+  session.setXml(testXmlInput02)
 })
 </script>
 
@@ -564,7 +412,7 @@ onMounted(async () => {
   --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
 
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto auto 1fr;
   gap: 16px;
   height: 100vh;
   box-sizing: border-box;
@@ -664,6 +512,56 @@ onMounted(async () => {
 }
 
 /* --- Equation preview / diagnostics band --- */
+
+.model-bar {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.model-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.8125rem;
+}
+
+.model-label {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.model-value {
+  font-family: var(--font-mono);
+  color: var(--color-text);
+}
+
+.model-input {
+  min-width: 220px;
+  padding: 5px 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+.model-input:disabled {
+  background: var(--color-surface-sunken);
+  color: var(--color-text-muted);
+}
+
+.model-input:focus-visible {
+  border-color: var(--color-accent);
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
 
 .preview-band {
   display: flex;
@@ -828,6 +726,23 @@ onMounted(async () => {
   gap: 4px;
   color: var(--color-text-muted);
   font-size: 0.75rem;
+}
+
+.var-inherited {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+
+.var-inherited-value {
+  font-family: var(--font-mono);
+  color: var(--color-text);
+}
+
+.var-inherited-note {
+  font-style: italic;
 }
 
 .var-inputs input {

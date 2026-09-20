@@ -5,29 +5,15 @@ export { CellMLLatexGenerator } from './lib/CellMLLatexGenerator'
 
 export { cellml } from './lib/CellMLLanguage'
 
-export {
-  analyzeComponentVariables,
-  buildComponentGroups,
-  getVariableKey,
-  buildResolutionRequest,
-  validateResolution,
-  applyResolvedVariables,
-  resolveManagedVariables,
-  MockVariableResolver,
-} from './lib/CellMLVariableResolution'
+// Simple Mode: analyse a model's variables and declare them from a host-supplied list.
+export { analyzeModel, analyzeModelXml, applyVariableDefinitions } from './lib/CellMLVariableResolution'
 
 // Export interfaces.
-export type { ParserOptions, ParserResult, ParserError } from './lib/CellMLTextParser'
+export type { ParserOptions, ParseContext, ParserResult, ParserError } from './lib/CellMLTextParser'
 export type { CellMLTextGeneratorOptions } from './lib/CellMLTextGenerator'
 export type {
-  ComponentVariableAnalysis,
-  ComponentGroup,
-  ComponentGroupsResult,
+  DeclaredVariable,
+  ModelAnalysis,
+  VariableDefinition,
   VariableInterface,
-  ExternalVariableInfo,
-  VariableResolutionRequest,
-  VariableResolutionResult,
-  VariableResolver,
-  ComponentResolutionOutcome,
-  ModelResolutionSummary,
 } from './lib/CellMLVariableResolution'
