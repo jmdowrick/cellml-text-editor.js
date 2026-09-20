@@ -1,9 +1,8 @@
 const CELLML_2_0_NS = 'http://www.cellml.org/cellml/2.0#'
 
 export interface CellMLTextGeneratorOptions {
-  tabSize?: number | 2
-  simplified?: boolean | false
-  managed?: boolean | false
+  tabSize?: number
+  simplified?: boolean
 }
 
 export class CellMLTextGenerator {
@@ -11,14 +10,12 @@ export class CellMLTextGenerator {
   private indentLevel: number = 0
   private domParser: DOMParser
   private standardIndent: string = '  '
-  private simplified: boolean = false
-  private managed: boolean = false
+  public simplified: boolean = true
 
   constructor(options: CellMLTextGeneratorOptions = {}) {
     if (options.tabSize) {
       this.standardIndent = ' '.repeat(options.tabSize)
     }
-    this.managed = options.managed ?? false
     this.simplified = options.simplified ?? true
     this.domParser = new DOMParser()
   }
@@ -60,20 +57,22 @@ export class CellMLTextGenerator {
     if (!this.simplified) {
       this.append(`def model ${name} as`)
       this.indentLevel++
+
+      // 1. Process Units (not representable in Simple Mode)
+      const units = model.getElementsByTagName('units')
+      for (let i = 0; i < units.length; i++) {
+        // Only process units that are direct children of model
+        if (units[i]?.parentElement === model) this.processUnits(units[i])
+      }
     }
 
-    // 1. Process Units
-    const units = model.getElementsByTagName('units')
-    for (let i = 0; i < units.length; i++) {
-      // Only process units that are direct children of model
-      if (units[i]?.parentElement === model) this.processUnits(units[i])
-    }
-
-    // 2. Process Components
+    // 2. Process Components. The editor works on one component at a time, so
+    // Simple Mode shows just the first.
     const components = Array.from(model.getElementsByTagName('component'))
+    const shown = this.simplified ? components.slice(0, 1) : components
 
-    for (let i = 0; i < components.length; i++) {
-      this.processComponent(components[i])
+    for (const component of shown) {
+      this.processComponent(component)
     }
 
     // Ensure single newline after last component.
@@ -114,35 +113,31 @@ export class CellMLTextGenerator {
   }
 
   private processComponent(component: Element | null | undefined) {
-    const name = component?.getAttribute('name') || 'unnamed_component'
-
-    if (!this.simplified) {
-      this.append(`def comp ${name} as`)
-      this.indentLevel++
-      // Advanced view: display variable declarations
-      const vars = component?.getElementsByTagName('variable') || []
-      for (let i = 0; i < vars.length; i++) {
-        this.processVariable(vars[i])
-      }
-    } else {
-      this.append(`comp ${name} {`)
-      this.indentLevel++
-      // Simple view: Hide variable declarations if managed
-      if (!this.managed) {
-        const vars = component?.getElementsByTagName('variable') || []
-        for (let i = 0; i < vars.length; i++) {
-          this.processVariable(vars[i])
-        }
-      }
+    if (this.simplified) {
+      this.processComponentMath(component)
+      return
     }
 
+    const name = component?.getAttribute('name') || 'unnamed_component'
+    this.append(`def comp ${name} as`)
+    this.indentLevel++
+
+    const vars = component?.getElementsByTagName('variable') || []
+    for (let i = 0; i < vars.length; i++) {
+      this.processVariable(vars[i])
+    }
+
+    this.processComponentMath(component)
+
+    this.indentLevel--
+    this.append('enddef;\n')
+  }
+
+  private processComponentMath(component: Element | null | undefined) {
     const maths = component?.getElementsByTagNameNS('http://www.w3.org/1998/Math/MathML', 'math') || []
     for (let i = 0; i < maths.length; i++) {
       this.processMath(maths[i])
     }
-
-    this.indentLevel--
-    this.append(this.simplified ? '}\n' : 'enddef;\n')
   }
 
   private processVariable(v: Element | null | undefined) {
@@ -155,10 +150,7 @@ export class CellMLTextGenerator {
 
     if (initial) attributes.push(`init: ${initial}`)
 
-    const shouldHideInterface = this.simplified && inf === 'public'
-    if (inf && !shouldHideInterface) {
-      attributes.push(`interface: ${inf}`)
-    }
+    if (inf) attributes.push(`interface: ${inf}`)
 
     if (attributes.length > 0) {
       line += ` {${attributes.join(', ')}}`
