@@ -5,8 +5,13 @@ const MATHML_NS = 'http://www.w3.org/1998/Math/MathML'
 
 export interface ParserOptions {
   sourceLineAttribute?: string | null
-  simplified?: boolean | false
-  modelName?: string
+  simplified?: boolean
+}
+
+export interface ParseContext {
+  baseXml?: string
+  componentName?: string
+  finalise?: (doc: XMLDocument) => void
 }
 
 export interface ParserError {
@@ -17,28 +22,58 @@ export interface ParserError {
 export interface ParserResult {
   xml: string | null
   errors: ParserError[]
+  doc: XMLDocument | null
 }
+
+interface BaseModelInfo {
+  attributes: Array<[string, string]>
+  componentName: string | null
+}
+
+const NO_BASE: BaseModelInfo = { attributes: [], componentName: null }
 
 export class CellMLTextParser {
   private scanner!: CellMLTextScanner
   private _doc!: XMLDocument
   private sourceLineAttr: string | null
-  private simplified: boolean
-  private modelName: string
+  private baseCache: { xml: string; info: BaseModelInfo } | null = null
+  public simplified: boolean
 
   constructor(options: ParserOptions = {}) {
     this.sourceLineAttr =
       options.sourceLineAttribute === undefined ? 'data-source-location' : options.sourceLineAttribute
     this.simplified = options.simplified ?? false
-    this.modelName = options.modelName ?? 'model'
   }
 
-  /** The XML document built by the most recent parse() call. Useful for feeding into resolveManagedVariables(). */
+  /** The XML document built by the most recent parse() call. */
   public get doc(): XMLDocument {
     return this._doc
   }
 
-  public parse(text: string): ParserResult {
+  /** Reads the root attributes and first component name of the model being edited (cached per string). */
+  private readBase(baseXml: string | undefined): BaseModelInfo {
+    if (!baseXml) return NO_BASE
+    if (this.baseCache?.xml === baseXml) return this.baseCache.info
+
+    let info = NO_BASE
+    const parsed = new DOMParser().parseFromString(baseXml, 'application/xml')
+    if (!parsed.querySelector('parsererror')) {
+      const attributes: Array<[string, string]> = []
+      const rootAttrs = parsed.documentElement.attributes
+      for (let i = 0; i < rootAttrs.length; i++) {
+        const attr = rootAttrs[i]
+        // xmlns declarations are re-added by serialize().
+        if (attr && attr.name !== 'xmlns' && !attr.name.startsWith('xmlns:')) attributes.push([attr.name, attr.value])
+      }
+      const component = parsed.getElementsByTagName('component')[0]
+      info = { attributes, componentName: component?.getAttribute('name') ?? null }
+    }
+
+    this.baseCache = { xml: baseXml, info }
+    return info
+  }
+
+  public parse(text: string, context: ParseContext = {}): ParserResult {
     this.scanner = new CellMLTextScanner(text)
     this._doc = document.implementation.createDocument(CELLML_NS, 'model', null)
 
@@ -46,27 +81,25 @@ export class CellMLTextParser {
       const root = this.doc.documentElement
 
       if (this.simplified && this.scanner.token !== TokenType.KwDef) {
-        if (!root.hasAttribute('name')) {
-          root.setAttribute('name', this.modelName)
-        }
+        // The model name (and any other root attributes) belong to the existing model, not the text.
+        const base = this.readBase(context.baseXml)
+        base.attributes.forEach(([name, value]) => root.setAttribute(name, value))
 
-        let defaultComp: Element | null = null
-        const getDefaultComp = () => {
-          if (!defaultComp) {
-            defaultComp = this.doc.createElementNS(CELLML_NS, 'component')
-            defaultComp.setAttribute('name', 'implicit_component')
-            root.appendChild(defaultComp)
-          }
-          return defaultComp
-        }
+        const comp = this.doc.createElementNS(CELLML_NS, 'component')
+        comp.setAttribute('name', context.componentName || base.componentName || 'component')
+        root.appendChild(comp)
 
         while (this.scanner.token !== TokenType.EOF) {
           if (this.scanner.token === TokenType.KwComp) {
-            this.parseSimpleComponentBlock(root)
+            throw new Error(
+              "The component name is set outside the text in Simple Mode. Remove the 'comp' wrapper, or switch to Advanced Mode.",
+            )
           } else if (this.scanner.token === TokenType.KwVar) {
-            this.parseVariable(getDefaultComp())
+            throw new Error(
+              "Variables are declared in the parameters panel in Simple Mode. Remove the 'var' line, or switch to Advanced Mode.",
+            )
           } else if (this.scanner.token === TokenType.Identifier || this.scanner.token === TokenType.KwSel) {
-            this.parseMathEquation(getDefaultComp())
+            this.parseMathEquation(comp)
           } else {
             this.scanner.nextToken()
           }
@@ -95,33 +128,20 @@ export class CellMLTextParser {
         this.expect(TokenType.SemiColon)
       }
 
-      return { xml: '<?xml version="1.0" encoding="UTF-8"?>\n' + this.serialize(root), errors: [] }
+      context.finalise?.(this._doc)
+
+      return {
+        xml: '<?xml version="1.0" encoding="UTF-8"?>\n' + this.serialize(root),
+        errors: [],
+        doc: this._doc,
+      }
     } catch (e: any) {
-      return { xml: null, errors: [{ line: this.scanner.getLine(), message: e.message || 'Unknown parsing error' }] }
-    }
-  }
-
-  private parseSimpleComponentBlock(parent: Element) {
-    this.expect(TokenType.KwComp)
-    const name = this.expectValue(TokenType.Identifier)
-
-    this.expect(TokenType.LBrace) // Expect {
-
-    const comp = this.doc.createElementNS(CELLML_NS, 'component')
-    comp.setAttribute('name', name)
-    parent.appendChild(comp)
-
-    while (this.scanner.token !== TokenType.RBrace && this.scanner.token !== TokenType.EOF) {
-      if (this.scanner.token === TokenType.KwVar) {
-        this.parseVariable(comp)
-      } else if (this.scanner.token === TokenType.Identifier || this.scanner.token === TokenType.KwSel) {
-        this.parseMathEquation(comp)
-      } else {
-        this.scanner.nextToken()
+      return {
+        xml: null,
+        errors: [{ line: this.scanner.getLine(), message: e.message || 'Unknown parsing error' }],
+        doc: null,
       }
     }
-
-    this.expect(TokenType.RBrace) // Consume }
   }
 
   private parseBlock(parent: Element) {
