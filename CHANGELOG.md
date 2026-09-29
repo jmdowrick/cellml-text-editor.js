@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.0
+
+`analyzeModel` reports what each equation defines and uses, and `classifyVariables` works out each variable's kind the way libcellml's Analyser does, even while the model is incomplete.
+
+### Added
+
+- **Equation roles in `ModelAnalysis`.** The new fields are:
+  - `assigned`: the variables on the left of an equation, including an ODE's state.
+  - `voi`: the variables inside a `<bvar>`.
+  - `dependencies`: one entry per equation. `target` is the variable it defines, or `null` for an ODE or an implicit equation. `uses` is every other variable in it.
+
+  The existing fields are unchanged.
+- **`classifyVariables(analysis, { constants? })`** returns each variable's kind: `voi`, `state`, `constant`, `computed_constant`, `algebraic` or `external`. These are the kinds of libcellml's `AnalyserVariable.Type`.
+  - libcellml only answers for a complete, valid model. `classifyVariables` also answers while variables are undeclared, missing initial values or waiting for a connection.
+  - Constants default to the declared variables with an initial value. Pass `constants` to decide them yourself.
+- **`isInitialisingKind(kind)`** is true for `constant` and `computed_constant`, the kinds that can be another variable's initial value.
+
+### Testing
+
+- The tests run against libcellml.js 0.7.1, the version phlynx ships.
+- `classifyVariables` is checked against libcellml's Analyser on every component in the bundled corpus that libcellml accepts. That is 251 of 260 components, and all of them agree. The cases where the two deliberately differ are listed in `analysis.test.ts`: libcellml rejects the model, or solves a system of equations for a variable that has an initial value.
+
 ## 0.5.1
 
 Renaming a variable in Simple Mode keeps its units and initial value.
