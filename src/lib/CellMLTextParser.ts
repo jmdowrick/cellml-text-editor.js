@@ -1,7 +1,20 @@
 import { CellMLTextScanner, TokenType } from './CellMLTextScanner'
+import {
+  CELLML_NS,
+  CONSTANTS,
+  FUNCTIONS,
+  MATHML_NS,
+  argumentCountMessage,
+  isCellMLBasicReal,
+  isCellMLIdentifier,
+  isCellMLInteger,
+  isCellMLReal,
+  lookup,
+  unknownFunctionMessage,
+  type FunctionSpec,
+} from './CellMLMathML'
 
-const CELLML_NS = 'http://www.cellml.org/cellml/2.0#'
-const MATHML_NS = 'http://www.w3.org/1998/Math/MathML'
+const INTERFACES = ['public', 'private', 'public_and_private', 'none']
 
 export interface ParserOptions {
   sourceLineAttribute?: string | null
@@ -36,6 +49,8 @@ export class CellMLTextParser {
   private scanner!: CellMLTextScanner
   private _doc!: XMLDocument
   private sourceLineAttr: string | null
+  /** Nodes the user wrapped in brackets, which must not be merged into a surrounding chain. */
+  private grouped = new WeakSet<Element>()
   private baseCache: { xml: string; info: BaseModelInfo } | null = null
   public simplified: boolean
 
@@ -75,7 +90,10 @@ export class CellMLTextParser {
 
   public parse(text: string, context: ParseContext = {}): ParserResult {
     this.scanner = new CellMLTextScanner(text)
-    this._doc = document.implementation.createDocument(CELLML_NS, 'model', null)
+    this.grouped = new WeakSet()
+    // DOMParser gives an XML document everywhere; document.implementation.createDocument
+    // gives an HTML one under happy-dom.
+    this._doc = new DOMParser().parseFromString(`<model xmlns="${CELLML_NS}"/>`, 'application/xml')
 
     try {
       const root = this.doc.documentElement
@@ -100,8 +118,10 @@ export class CellMLTextParser {
             )
           } else if (this.scanner.token === TokenType.Identifier || this.scanner.token === TokenType.KwSel) {
             this.parseMathEquation(comp)
+          } else if (this.scanner.token === TokenType.SemiColon) {
+            this.scanner.nextToken() // An empty statement loses nothing.
           } else {
-            this.scanner.nextToken()
+            throw new Error(`Unexpected '${this.scanner.value}'. Expected an equation.`)
           }
         }
       } else {
@@ -119,8 +139,10 @@ export class CellMLTextParser {
         while (this.scanner.token !== TokenType.KwEndDef && this.scanner.token !== TokenType.EOF) {
           if (this.scanner.token === TokenType.KwDef) {
             this.parseBlock(root)
-          } else {
+          } else if (this.scanner.token === TokenType.SemiColon) {
             this.scanner.nextToken()
+          } else {
+            throw new Error(`Unexpected '${this.scanner.value}'. Expected 'def comp', 'def unit' or 'enddef'.`)
           }
         }
 
@@ -158,7 +180,7 @@ export class CellMLTextParser {
 
   private parseComponent(parent: Element) {
     this.expect(TokenType.KwComp)
-    const name = this.expectValue(TokenType.Identifier)
+    const name = this.expectIdentifier('component name')
     this.expect(TokenType.KwAs)
 
     const comp = this.doc.createElementNS(CELLML_NS, 'component')
@@ -170,8 +192,10 @@ export class CellMLTextParser {
         this.parseVariable(comp)
       } else if (this.scanner.token === TokenType.Identifier || this.scanner.token === TokenType.KwSel) {
         this.parseMathEquation(comp)
-      } else {
+      } else if (this.scanner.token === TokenType.SemiColon) {
         this.scanner.nextToken()
+      } else {
+        throw new Error(`Unexpected '${this.scanner.value}'. Expected 'var', an equation or 'enddef'.`)
       }
     }
 
@@ -181,9 +205,10 @@ export class CellMLTextParser {
 
   private parseVariable(parent: Element) {
     this.expect(TokenType.KwVar)
-    const name = this.expectValue(TokenType.Identifier)
+    const name = this.expectIdentifier('variable name')
+    if (lookup(CONSTANTS, name)) throw new Error(`'${name}' is a constant, so it can't be used as a variable name`)
     this.expect(TokenType.Colon)
-    const units = this.expectValue(TokenType.Identifier)
+    const units = this.expectIdentifier('units name')
 
     const variable = this.doc.createElementNS(CELLML_NS, 'variable')
     variable.setAttribute('name', name)
@@ -207,10 +232,19 @@ export class CellMLTextParser {
           val = this.expectValue(TokenType.Identifier)
         }
 
-        if (prop === 'init') variable.setAttribute('initial_value', val)
-        else if (prop === 'interface') {
+        if (prop === 'init') {
+          if (!isCellMLReal(val) && !isCellMLIdentifier(val)) {
+            throw new Error(`Invalid initial value '${val}'. Use a number or a variable name.`)
+          }
+          variable.setAttribute('initial_value', val)
+        } else if (prop === 'interface') {
+          if (!INTERFACES.includes(val)) {
+            throw new Error(`Invalid interface '${val}'. Use one of: ${INTERFACES.join(', ')}.`)
+          }
           variable.setAttribute('interface', val)
           hasInterface = true
+        } else {
+          throw new Error(`Unknown variable property '${prop}'. Use 'init' or 'interface'.`)
         }
 
         if ((this.scanner.token as TokenType) === TokenType.OpComma) this.scanner.nextToken()
@@ -246,9 +280,7 @@ export class CellMLTextParser {
       parent.appendChild(math)
     }
 
-    const apply = this.doc.createElementNS(MATHML_NS, 'apply')
-    const eq = this.doc.createElementNS(MATHML_NS, 'eq')
-    apply.appendChild(eq)
+    const apply = this.createApply('eq')
 
     const lhsNode = this.parseExpression()
     this.expect(TokenType.OpAss)
@@ -269,106 +301,50 @@ export class CellMLTextParser {
     this.expect(TokenType.SemiColon)
   }
 
-  // Recursive Descent for Math: Condition -> Comparison -> Expression -> Term -> Factor
+  // Recursive descent for math, loosest first: Condition (or) -> Conjunction (and) -> Comparison -> Expression -> Term -> Factor
   private parseCondition(): Element {
-    // 1. Get the first comparison (e.g., "x > 5")
-    let left = this.parseComparison()
+    return this.parseLogical(TokenType.OpOr, 'or', () => this.parseConjunction())
+  }
 
-    // 2. Loop while we see Logical Operators
-    while (this.scanner.token === TokenType.OpAnd || this.scanner.token === TokenType.OpOr) {
-      const op = this.scanner.token
+  private parseConjunction(): Element {
+    return this.parseLogical(TokenType.OpAnd, 'and', () => this.parseComparison())
+  }
+
+  /** A chain of one logical operator; `a and b and c` becomes a single <and/> apply. */
+  private parseLogical(token: TokenType, operator: string, parseOperand: () => Element): Element {
+    let left = parseOperand()
+
+    while (this.scanner.token === token) {
       this.scanner.nextToken()
-
-      // 3. Get the next condition (e.g., "y < 10")
-      const right = this.parseComparison()
-
-      // 4. Wrap them in an <apply> block
-      const apply = this.doc.createElementNS(MATHML_NS, 'apply')
-
-      // MathML uses <and/> and <or/> tags
-      const opNode = this.doc.createElementNS(MATHML_NS, op === TokenType.OpAnd ? 'and' : 'or')
-
-      apply.appendChild(opNode)
-      apply.appendChild(left)
-      apply.appendChild(right)
-
-      // 5. The result becomes the new 'left' for the next iteration
-      // This supports chaining: a and b and c
-      left = apply
+      const right = parseOperand()
+      left = this.appendOrApply(left, operator, right)
     }
 
     return left
   }
 
-  private isComparisonToken(t: TokenType): boolean {
-    return [TokenType.OpEq, TokenType.OpNe, TokenType.OpLt, TokenType.OpLe, TokenType.OpGt, TokenType.OpGe].includes(t)
+  private static readonly COMPARISONS: Partial<Record<TokenType, string>> = {
+    [TokenType.OpEq]: 'eq',
+    [TokenType.OpNe]: 'neq',
+    [TokenType.OpLt]: 'lt',
+    [TokenType.OpLe]: 'leq',
+    [TokenType.OpGt]: 'gt',
+    [TokenType.OpGe]: 'geq',
   }
 
-  // The new parsing layer
   private parseComparison(): Element {
-    // 1. Parse the left side (standard arithmetic expression)
-    let left = this.parseExpression()
+    const left = this.parseExpression()
 
-    // 2. Check if the next token is a comparison operator (==, <, >, etc.)
-    if (this.isComparisonToken(this.scanner.token)) {
-      const opToken = this.scanner.token
-      this.scanner.nextToken() // Consume the operator
+    const tagName = CellMLTextParser.COMPARISONS[this.scanner.token]
+    if (!tagName) return left // No comparison, e.g. a boolean variable.
 
-      // 3. Parse the right side
-      const right = this.parseExpression()
+    this.scanner.nextToken()
+    const right = this.parseExpression()
 
-      // 4. Create the <apply> block
-      const apply = this.doc.createElementNS(MATHML_NS, 'apply')
-
-      // Map token to MathML tag
-      let tagName = ''
-      switch (opToken) {
-        case TokenType.OpEq:
-          tagName = 'eq'
-          break
-        case TokenType.OpNe:
-          tagName = 'neq'
-          break
-        case TokenType.OpLt:
-          tagName = 'lt'
-          break
-        case TokenType.OpLe:
-          tagName = 'leq'
-          break
-        case TokenType.OpGt:
-          tagName = 'gt'
-          break
-        case TokenType.OpGe:
-          tagName = 'geq'
-          break
-        case TokenType.OpAnd:
-          tagName = 'and'
-          break
-      }
-
-      const opNode = this.doc.createElementNS(MATHML_NS, tagName)
-      apply.appendChild(opNode)
-      apply.appendChild(left)
-      apply.appendChild(right)
-
-      return apply
-    }
-
-    // If no comparison found, just return the expression (e.g. boolean variable)
-    return left
-  }
-
-  /**
-   * Checks if an element is an <apply> block for a specific operator.
-   * e.g. isMathMLApply(node, 'plus') returns true for <apply><plus/>...</apply>
-   */
-  private isMathMLApply(node: Element, operatorName: string): boolean {
-    // 1. Must be an <apply> tag
-    if (node.localName !== 'apply') return false
-
-    // 2. The first child must be the operator tag (e.g. <plus/>)
-    const op = node.firstElementChild
-    return op ? op.localName === operatorName : false
+    const apply = this.createApply(tagName)
+    apply.appendChild(left)
+    apply.appendChild(right)
+    return apply
   }
 
   private parseExpression(): Element {
@@ -378,17 +354,7 @@ export class CellMLTextParser {
       const op = this.scanner.token
       this.scanner.nextToken()
       const right = this.parseTerm()
-
-      if (op === TokenType.OpPlus && this.isMathMLApply(left, 'plus')) {
-        left.appendChild(right)
-      } else {
-        const apply = this.doc.createElementNS(MATHML_NS, 'apply')
-        const opNode = this.doc.createElementNS(MATHML_NS, op === TokenType.OpPlus ? 'plus' : 'minus')
-        apply.appendChild(opNode)
-        apply.appendChild(left)
-        apply.appendChild(right)
-        left = apply
-      }
+      left = this.appendOrApply(left, op === TokenType.OpPlus ? 'plus' : 'minus', right)
     }
     return left
   }
@@ -400,93 +366,46 @@ export class CellMLTextParser {
       const op = this.scanner.token
       this.scanner.nextToken()
       const right = this.parseFactor()
-      if (op === TokenType.OpTimes && this.isMathMLApply(left, 'times')) {
-        left.appendChild(right)
-      } else {
-        const apply = this.doc.createElementNS(MATHML_NS, 'apply')
-        const opNode = this.doc.createElementNS(MATHML_NS, op === TokenType.OpTimes ? 'times' : 'divide')
-        apply.appendChild(opNode)
-        apply.appendChild(left)
-        apply.appendChild(right)
-        left = apply
-      }
+      left = this.appendOrApply(left, op === TokenType.OpTimes ? 'times' : 'divide', right)
     }
     return left
   }
 
   /**
-   * Checks if the identifier is a reserved MathML constant name
-   * and returns the corresponding element, or null if it's a variable.
+   * Builds `left <operator> right`. For n-ary operators (plus, times, and, or) a
+   * chain is merged into one apply, unless the user bracketed the left side.
    */
-  private createMathMLConstant(name: string): Element | null {
-    // Map of "User Text" -> "MathML Tag Name"
-    const constants: Record<string, string> = {
-      pi: 'pi',
-      e: 'exponentiale',
-      inf: 'infinity',
-      infinity: 'infinity',
-      NaN: 'notanumber',
-      true: 'true',
-      false: 'false',
+  private appendOrApply(left: Element, operator: string, right: Element): Element {
+    const nAry = operator === 'plus' || operator === 'times' || operator === 'and' || operator === 'or'
+    if (nAry && !this.grouped.has(left) && left.localName === 'apply' && left.firstElementChild?.localName === operator) {
+      left.appendChild(right)
+      return left
     }
 
-    if (constants.hasOwnProperty(name)) {
-      return this.doc.createElementNS(MATHML_NS, constants[name] || '')
-    }
-
-    return null
+    const apply = this.createApply(operator)
+    apply.appendChild(left)
+    apply.appendChild(right)
+    return apply
   }
 
   private parseFactor(): Element {
-    // Handle unary minus.
-    if (this.scanner.token === TokenType.OpMinus) {
-
+    // Handle unary minus and plus.
+    if (this.scanner.token === TokenType.OpMinus || this.scanner.token === TokenType.OpPlus) {
+      const operator = this.scanner.token === TokenType.OpMinus ? 'minus' : 'plus'
       // Recursively call parseFactor.
       // This handles cases like "-5", "-a", or even "- -5"
       this.scanner.nextToken()
       const child = this.parseFactor()
 
-      // Create the <apply><minus/><child/></apply> structure
-      const apply = this.doc.createElementNS(MATHML_NS, 'apply')
-      const minus = this.doc.createElementNS(MATHML_NS, 'minus')
-
-      apply.appendChild(minus)
+      const apply = this.createApply(operator)
       apply.appendChild(child)
-
+      // `+a + b` is (plus (plus a) b): a later `+` must not join the unary plus.
+      this.grouped.add(apply)
       return apply
     }
 
     if (this.scanner.token === TokenType.Number) {
-      const val = this.scanner.value
-      this.scanner.nextToken()
-      const cn = this.doc.createElementNS(MATHML_NS, 'cn')
-      let hasExplicitUnits = false
-
-      // Check for a units annotation attached to number, e.g. {dimensionless}
-      if ((this.scanner.token as TokenType) === TokenType.LBrace) {
-        this.scanner.nextToken() // eat '{'
-        const unitsName = this.expectValue(TokenType.Identifier)
-        cn.setAttributeNS(CELLML_NS, 'cellml:units', unitsName)
-        hasExplicitUnits = true
-        this.expect(TokenType.RBrace)
-      }
-
-      // Explicitly tag cellml:units="dimensionless" in XML DOM when omitted in text
-      if (!hasExplicitUnits) {
-        cn.setAttributeNS(CELLML_NS, 'cellml:units', 'dimensionless')
-      }
-
-      if (val.match(/^-?[\d.]+[eE][+-]?\d+$/)) {
-        cn.setAttribute('type', 'e-notation')
-        const sep = this.doc.createElementNS(MATHML_NS, 'sep')
-        const [mantissa, exponent] = val.split(/[eE]/)
-        cn.appendChild(this.doc.createTextNode(mantissa || '1'))
-        cn.appendChild(sep)
-        cn.appendChild(this.doc.createTextNode(exponent || '0'))
-      } else {
-        cn.textContent = val
-      }
-      return cn
+      return this.parseNumber()
     } else if (this.scanner.token === TokenType.Identifier) {
       const name = this.scanner.value
       this.scanner.nextToken()
@@ -497,24 +416,51 @@ export class CellMLTextParser {
       }
 
       // Check if it is a known MathML constant (pi, e, inf, etc.)
-      const constantNode = this.createMathMLConstant(name)
-      if (constantNode) {
-        return constantNode
-      }
+      const constant = lookup(CONSTANTS, name)
+      if (constant) return this.doc.createElementNS(MATHML_NS, constant)
 
-      const ci = this.doc.createElementNS(MATHML_NS, 'ci')
-      ci.textContent = name
-      return ci
+      return this.createCi(name)
     } else if (this.scanner.token === TokenType.LParam) {
+      // Brackets may hold a condition, so `(a > b or c) and d` parses.
       this.scanner.nextToken()
-      const node = this.parseExpression()
+      const node = this.parseCondition()
       this.expect(TokenType.RParam)
+      this.grouped.add(node)
       return node
     } else if (this.scanner.token === TokenType.KwSel) {
       return this.parsePiecewise()
     }
 
     throw new Error(`Unexpected token in math: ${this.scanner.value}`)
+  }
+
+  private parseNumber(): Element {
+    const val = this.scanner.value
+    this.scanner.nextToken()
+    const cn = this.doc.createElementNS(MATHML_NS, 'cn')
+
+    // A units annotation attached to the number, e.g. {dimensionless}. Omitted means dimensionless.
+    let units = 'dimensionless'
+    if ((this.scanner.token as TokenType) === TokenType.LBrace) {
+      this.scanner.nextToken() // eat '{'
+      units = this.expectIdentifier('units name')
+      this.expect(TokenType.RBrace)
+    }
+    cn.setAttributeNS(CELLML_NS, 'cellml:units', units)
+
+    const exponential = val.match(/^([^eE]*)[eE](.*)$/)
+    if (exponential) {
+      const [, mantissa = '', exponent = ''] = exponential
+      if (!isCellMLBasicReal(mantissa) || !isCellMLInteger(exponent)) throw new Error(`Invalid number '${val}'`)
+      cn.setAttribute('type', 'e-notation')
+      cn.appendChild(this.doc.createTextNode(mantissa))
+      cn.appendChild(this.doc.createElementNS(MATHML_NS, 'sep'))
+      cn.appendChild(this.doc.createTextNode(exponent))
+    } else {
+      if (!isCellMLBasicReal(val)) throw new Error(`Invalid number '${val}'`)
+      cn.textContent = val
+    }
+    return cn
   }
 
   private parsePiecewise(): Element {
@@ -560,39 +506,84 @@ export class CellMLTextParser {
   }
 
   private parseFunctionCall(funcName: string): Element {
+    const spec = lookup(FUNCTIONS, funcName)
+    if (!spec) throw new Error(unknownFunctionMessage(funcName))
+
     this.expect(TokenType.LParam)
 
-    // Special Case: ode(dep, indep) -> <diff/> <bvar>indep</bvar> dep
-    if (funcName === 'ode') {
-      const dep = this.parseExpression()
-      this.expect(TokenType.OpComma)
-      const indep = this.parseExpression()
-      this.expect(TokenType.RParam)
-
-      const diffApply = this.doc.createElementNS(MATHML_NS, 'apply')
-      diffApply.appendChild(this.doc.createElementNS(MATHML_NS, 'diff'))
-
-      const bvar = this.doc.createElementNS(MATHML_NS, 'bvar')
-      bvar.appendChild(indep)
-      diffApply.appendChild(bvar)
-
-      diffApply.appendChild(dep)
-      return diffApply
-    }
-
-    const apply = this.doc.createElementNS(MATHML_NS, 'apply')
-    const op = this.doc.createElementNS(MATHML_NS, funcName)
-    apply.appendChild(op)
-
+    const args: Element[] = []
     if (this.scanner.token !== TokenType.RParam) {
-      do {
-        if (this.scanner.token === TokenType.OpComma) this.scanner.nextToken()
-        apply.appendChild(this.parseExpression())
-      } while (this.scanner.token === TokenType.OpComma)
+      args.push(this.parseArgument(spec))
+      while (this.scanner.token === TokenType.OpComma) {
+        this.scanner.nextToken()
+        args.push(this.parseArgument(spec))
+      }
     }
 
     this.expect(TokenType.RParam)
+
+    if (args.length < spec.minArgs || args.length > spec.maxArgs) {
+      throw new Error(argumentCountMessage(funcName, spec, args.length))
+    }
+
+    return this.buildFunction(funcName, spec, args)
+  }
+
+  private parseArgument(spec: FunctionSpec): Element {
+    return spec.argKind === 'boolean' ? this.parseCondition() : this.parseExpression()
+  }
+
+  private buildFunction(funcName: string, spec: FunctionSpec, args: Element[]): Element {
+    const apply = this.createApply(spec.element)
+    const [first, second, third] = args
+
+    switch (funcName) {
+      case 'root': // root(x, n) -> <root/><degree>n</degree>x
+        apply.appendChild(this.wrap('degree', second!))
+        apply.appendChild(first!)
+        return apply
+
+      case 'log': // log(x, b) -> <log/><logbase>b</logbase>x
+        if (second) apply.appendChild(this.wrap('logbase', second))
+        apply.appendChild(first!)
+        return apply
+
+      case 'ode': {
+        // ode(x, t, n) -> <diff/><bvar><ci>t</ci><degree>n</degree></bvar>x
+        if (second!.localName !== 'ci' || this.grouped.has(second!)) {
+          throw new Error("The second argument of 'ode' must be a variable name, e.g. ode(x, t)")
+        }
+        const bvar = this.wrap('bvar', second!)
+        if (third) bvar.appendChild(this.wrap('degree', third))
+        apply.appendChild(bvar)
+        apply.appendChild(first!)
+        return apply
+      }
+
+      default:
+        args.forEach((arg) => apply.appendChild(arg))
+        return apply
+    }
+  }
+
+  private createApply(operator: string): Element {
+    const apply = this.doc.createElementNS(MATHML_NS, 'apply')
+    apply.appendChild(this.doc.createElementNS(MATHML_NS, operator))
     return apply
+  }
+
+  private createCi(name: string): Element {
+    if (!isCellMLIdentifier(name)) throw new Error(`Invalid variable name '${name}'`)
+    const ci = this.doc.createElementNS(MATHML_NS, 'ci')
+    ci.textContent = name
+    return ci
+  }
+
+  /** <tag>child</tag>, for the qualifiers degree, logbase and bvar. */
+  private wrap(tag: string, child: Element): Element {
+    const element = this.doc.createElementNS(MATHML_NS, tag)
+    element.appendChild(child)
+    return element
   }
 
   // --- Helpers ---
@@ -601,6 +592,16 @@ export class CellMLTextParser {
       throw new Error(`Syntax Error: Expected ${TokenType[type]} but found '${this.scanner.value}'`)
     }
     this.scanner.nextToken()
+  }
+
+  private expectIdentifier(what: string): string {
+    if (this.scanner.token !== TokenType.Identifier) {
+      throw new Error(`Expected a ${what} but found '${this.scanner.value}'`)
+    }
+    const name = this.scanner.value
+    if (!isCellMLIdentifier(name)) throw new Error(`Invalid ${what} '${name}'`)
+    this.scanner.nextToken()
+    return name
   }
 
   private expectValue(type: TokenType): string {

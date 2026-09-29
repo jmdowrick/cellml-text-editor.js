@@ -1,13 +1,30 @@
-const PRECEDENCE: Record<string, number> = {
-  atomic: 100, // Identifiers, numbers
-  func: 90, // sin, cos, exp (visually self-contained)
-  power: 80, // ^
-  times: 70, // *
-  divide: 70, // / (usually self-contained in \frac, but good to have)
-  plus: 60, // +
-  minus: 60, // -
-  rel: 50, // =, <, >
-  unknown: 0,
+import { PRECEDENCE, lookup } from './CellMLMathML'
+
+// On top of the shared precedence table: powers bind tighter than any infix
+// operator, and function calls are visually self-contained.
+const POWER_PRECEDENCE = 80
+const FUNCTION_PRECEDENCE = 90
+
+/** Children of an <apply> that qualify the operator rather than being operands. */
+const QUALIFIERS = new Set(['bvar', 'degree', 'logbase'])
+
+/** Functions KaTeX has a macro for, e.g. \sin. The rest are written with \operatorname. */
+const LATEX_FUNCTIONS = new Set([
+  'sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'sinh', 'cosh', 'tanh', 'coth',
+  'arcsin', 'arccos', 'arctan', 'ln', 'log', 'min', 'max',
+])
+const OPERATOR_NAMES = new Set([
+  'rem', 'sech', 'csch', 'arcsec', 'arccsc', 'arccot',
+  'arcsinh', 'arccosh', 'arctanh', 'arcsech', 'arccsch', 'arccoth',
+])
+
+const CONSTANTS: Record<string, string> = {
+  pi: '\\pi',
+  exponentiale: 'e',
+  infinity: '\\infty',
+  notanumber: '\\mathrm{NaN}',
+  true: '\\mathrm{true}',
+  false: '\\mathrm{false}',
 }
 
 export class CellMLLatexGenerator {
@@ -79,7 +96,8 @@ export class CellMLLatexGenerator {
       return text
     }
     if (tag === 'piecewise') return this.parsePiecewise(node)
-    if (tag === 'pi') return '\\pi'
+    const constant = lookup(CONSTANTS, tag)
+    if (constant) return constant
     if (this.ignoreTag(tag)) return ''
 
     console.warn(`Unsupported MathML node: ${tag}`)
@@ -166,14 +184,16 @@ export class CellMLLatexGenerator {
   private parseApply(node: Element | null | undefined, parentPrecedence: number): string {
     const children = Array.from(node?.children || [])
     const op = children[0]?.localName || 'unknown'
-    const myPrecedence = PRECEDENCE[op] || PRECEDENCE.func!
-    const args = children.slice(1).map((c, index) => {
+    const myPrecedence = lookup(PRECEDENCE, op) ?? (op === 'power' ? POWER_PRECEDENCE : FUNCTION_PRECEDENCE)
+    const operands = children.slice(1).filter((c) => !QUALIFIERS.has(c.localName))
+    const qualifier = (name: string) => children.find((c) => c.localName === name)?.firstElementChild ?? undefined
+    const args = operands.map((c, index) => {
       let childExpectedPrec = myPrecedence
       // Special cases for child precedence.
-      if (['divide', 'diff', 'root', 'sqrt', 'sin', 'cos', 'tan', 'exp', 'ln', 'log'].includes(op)) {
-        childExpectedPrec = 0
-      } else if (op === 'minus' && index === 1) {
-        // Right operand of subtraction.
+      if (myPrecedence === FUNCTION_PRECEDENCE || op === 'divide') {
+        childExpectedPrec = 0 // Self-contained: \frac{}{}, \sqrt{}, \sin\left(\right)
+      } else if (op === 'minus' && (index === 1 || operands.length === 1)) {
+        // Right operand of subtraction, or the operand of a negation: -(a + b).
         childExpectedPrec = myPrecedence + 1
       }
       return this.parseNode(c, childExpectedPrec)
@@ -230,17 +250,30 @@ export class CellMLLatexGenerator {
         latex = isAtomic ? `{${baseString}}^{${expString}}` : `\\left({${baseString}}\\right)^{${expString}}`
         break
       case 'root':
-      case 'sqrt':
-        latex = `\\sqrt{${args[0]}}` // simple sqrt
+      case 'sqrt': {
+        // <sqrt/> isn't CellML, but is still read from older models.
+        const degree = qualifier('degree')
+        latex = degree ? `\\sqrt[${this.parseNode(degree)}]{${args[0]}}` : `\\sqrt{${args[0]}}`
         break
-      case 'diff':
+      }
+      case 'log': {
+        const base = qualifier('logbase')
+        latex = base ? `\\log_{${this.parseNode(base)}}\\left(${args[0]}\\right)` : `\\log\\left(${args[0]}\\right)`
+        break
+      }
+      case 'diff': {
         // <diff/> <bvar>t</bvar> V  --> \frac{dV}{dt}
         const bvar = children.find((c) => c.localName === 'bvar')
-        const dep = children.find((c) => c.localName !== 'diff' && c.localName !== 'bvar')
-        const indepStr = bvar ? this.parseNode(bvar.firstElementChild as Element) : 'x'
-        const depStr = dep ? this.parseNode(dep) : 'y'
-        latex = `\\frac{d${depStr}}{d${indepStr}}`
+        const indep = bvar ? Array.from(bvar.children).find((c) => c.localName === 'ci') : undefined
+        const degreeNode = bvar ? Array.from(bvar.children).find((c) => c.localName === 'degree') : undefined
+        const indepStr = indep ? this.parseNode(indep) : 'x'
+        const depStr = args[0] ?? 'y'
+        const order = degreeNode?.firstElementChild ? this.parseNode(degreeNode.firstElementChild) : ''
+        latex = order
+          ? `\\frac{d^{${order}}${depStr}}{d${indepStr}^{${order}}}`
+          : `\\frac{d${depStr}}{d${indepStr}}`
         break
+      }
       // Trig & Funcs
       case 'exp':
         latex = `e^{${args[0]}}`
@@ -251,26 +284,25 @@ export class CellMLLatexGenerator {
       case 'floor':
         latex = `\\lfloor ${args[0]} \\rfloor`
         break
-      case 'ceil':
+      case 'ceiling':
         latex = `\\lceil ${args[0]} \\rceil`
         break
-      case 'cos':
-      case 'cosh':
-      case 'log10':
-      case 'log':
-      case 'ln':
-      case 'max':
-      case 'min':
-      case 'sin':
-      case 'sinh':
-      case 'tan':
-      case 'tanh':
-        latex = `\\${op}\\left(${args[0]}\\right)`
+      case 'not':
+        latex = `\\lnot\\left(${args[0]}\\right)`
+        break
+      case 'xor':
+        latex = args.map((a) => `\\left(${a}\\right)`).join(' \\oplus ')
         break
 
       default:
-        console.log(`Unsupported MathML operator: ${op}`)
-        latex = `\\text{${op}}(${args.join(', ')})`
+        if (LATEX_FUNCTIONS.has(op)) {
+          latex = `\\${op}\\left(${args.join(', ')}\\right)`
+        } else if (OPERATOR_NAMES.has(op)) {
+          latex = `\\operatorname{${op}}\\left(${args.join(', ')}\\right)`
+        } else {
+          console.log(`Unsupported MathML operator: ${op}`)
+          latex = `\\text{${op}}(${args.join(', ')})`
+        }
         break
     }
 
