@@ -1,9 +1,11 @@
 import { CellMLTextGenerator } from './CellMLTextGenerator'
 import { CellMLTextParser, type ParserError } from './CellMLTextParser'
 import { CellMLLatexGenerator } from './CellMLLatexGenerator'
+import { detectRenames, renameIdentifier } from './CellMLRename'
 import {
   analyzeModel,
   applyVariableDefinitions,
+  referenceSequence,
   type ModelAnalysis,
   type VariableDefinition,
 } from './CellMLVariableResolution'
@@ -21,6 +23,13 @@ export interface SessionVariable {
   role: 'state' | 'initializer' | 'reference'
   /** Initializers only: the state variable whose units they share. */
   unitsFrom?: string
+}
+
+/** Some uses of `from` were renamed to `to`; `uses` is how many are left. */
+export interface PendingRename {
+  from: string
+  to: string
+  uses: number
 }
 
 export interface SessionComponentGroup {
@@ -63,6 +72,9 @@ export class CellMLModelSession {
   private _componentName = ''
   private _analysis: ModelAnalysis = EMPTY_ANALYSIS
   private doc: XMLDocument | null = null
+  /** The `<ci>` names of the last good parse, in order: what the next edit is compared against. */
+  private references: string[] = []
+  private _pendingRename: PendingRename | null = null
 
   // Variable metadata kept outside the text (Simple Mode).
   private units = new Map<string, string>()
@@ -145,6 +157,10 @@ export class CellMLModelSession {
   get isComplete() {
     return this.editable && this.missing.length === 0
   }
+  /** Simple Mode: a variable renamed in some places but not others, offered for renaming everywhere. */
+  get pendingRename(): PendingRename | null {
+    return this._pendingRename
+  }
 
   // --- Editing -------------------------------------------------------------
 
@@ -153,6 +169,8 @@ export class CellMLModelSession {
     this._xml = xml
     this.units.clear()
     this.initials.clear()
+    this.references = []
+    this._pendingRename = null
 
     const analysis = analyzeSafely(xml)
     for (const v of analysis.declared) {
@@ -176,6 +194,7 @@ export class CellMLModelSession {
   setMode({ simple }: { simple: boolean }) {
     if (simple === this._simple) return
     this._simple = simple
+    this._pendingRename = null
     this.generator.simplified = simple
     this.parser.simplified = simple
     this.regenerateText()
@@ -201,6 +220,25 @@ export class CellMLModelSession {
     if (value.trim()) this.initials.set(variableName, value.trim())
     else this.initials.delete(variableName)
     this.rebuild()
+  }
+
+  /** Renames the pending variable in the rest of the text. `to` already has its units and initial value. */
+  renameEverywhere() {
+    const pending = this._pendingRename
+    if (!pending) return
+    this._pendingRename = null
+    this._text = renameIdentifier(this._text, pending.from, pending.to)
+    this.textRevision++
+    this.units.delete(pending.from)
+    this.initials.delete(pending.from)
+    this.rebuild()
+  }
+
+  /** Keeps the pending rename's two names as separate variables. */
+  dismissRename() {
+    if (!this._pendingRename) return
+    this._pendingRename = null
+    this.notify()
   }
 
   /** LaTeX for the equation on a given text line, or '' when there isn't one. */
@@ -258,12 +296,44 @@ export class CellMLModelSession {
     return definitions
   }
 
+  /**
+   * Simple Mode: a variable renamed in the equations keeps its units and initial value. Renamed
+   * everywhere, they move to the new name; renamed in some places, the new name gets a copy and the
+   * rest are offered for renaming too. A name that was already in use keeps its own.
+   */
+  private carryRenames(after: string[]) {
+    const before = new Set(this.references)
+
+    for (const { from, to } of detectRenames(this.references, after)) {
+      if (before.has(to) || this.units.has(to) || this.initials.has(to)) continue
+
+      const units = this.units.get(from)
+      const initial = this.initials.get(from)
+      if (units) this.units.set(to, units)
+      if (initial) this.initials.set(to, initial)
+
+      const uses = after.filter((name) => name === from).length
+      if (uses === 0) {
+        this.units.delete(from)
+        this.initials.delete(from)
+        // Still typing the new name: follow it.
+        if (this._pendingRename?.to === from) this._pendingRename = { ...this._pendingRename, to }
+        else if (this._pendingRename?.from === from) this._pendingRename = null
+      } else {
+        this._pendingRename = { from, to, uses }
+      }
+    }
+  }
+
   private rebuild() {
     const result = this.parser.parse(this._text, {
       baseXml: this._xml,
       componentName: this._componentName || undefined,
       finalise: this._simple
-        ? (doc) => applyVariableDefinitions(doc, this.definitions(analyzeModel(doc).stateVariables))
+        ? (doc) => {
+            this.carryRenames(referenceSequence(doc))
+            applyVariableDefinitions(doc, this.definitions(analyzeModel(doc).stateVariables))
+          }
         : undefined,
     })
 
@@ -273,8 +343,16 @@ export class CellMLModelSession {
       this._xml = result.xml
       this.doc = result.doc
       this._analysis = analyzeModel(result.doc)
+      this.references = referenceSequence(result.doc)
       // Advanced Mode: the text names the component.
       if (!this._simple && this._analysis.componentName) this._componentName = this._analysis.componentName
+
+      const pending = this._pendingRename
+      if (pending) {
+        const uses = this.references.filter((name) => name === pending.from).length
+        if (uses === 0 || !this.references.includes(pending.to)) this._pendingRename = null
+        else if (uses !== pending.uses) this._pendingRename = { ...pending, uses }
+      }
     }
 
     this.notify()
