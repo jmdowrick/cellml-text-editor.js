@@ -10,7 +10,7 @@ export { analyzeModel, analyzeModelXml, applyVariableDefinitions } from './lib/C
 
 // Export interfaces.
 export type { ParserOptions, ParseContext, ParserResult, ParserError } from './lib/CellMLTextParser'
-export type { CellMLTextGeneratorOptions } from './lib/CellMLTextGenerator'
+export type { CellMLTextGeneratorOptions, GeneratorError, GeneratorResult } from './lib/CellMLTextGenerator'
 export type {
   DeclaredVariable,
   ModelAnalysis,

@@ -40,7 +40,7 @@
     <section class="preview-band">
       <div v-if="errors.length > 0" class="error-banner">
         <div v-for="(err, index) in errors" :key="index" class="error-line">
-          <span class="error-loc">Line {{ err.line }}</span>{{ err.message }}
+          <span class="error-loc">{{ err.line ? `Line ${err.line}` : 'XML' }}</span>{{ err.message }}
         </div>
       </div>
       <div v-else class="preview-pane" ref="latexContainer"></div>

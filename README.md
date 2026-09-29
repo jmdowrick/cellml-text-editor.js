@@ -54,12 +54,21 @@ if (result.errors.length > 0) {
 import { CellMLTextGenerator } from 'cellml-text-editor';
 
 const generator = new CellMLTextGenerator();
-// Assume 'doc' is a CellML XMLDocument
-const textOutput = generator.generate(doc);
+// 'xml' is a CellML 2.0 model, as a string
+const { text, errors } = generator.generateResult(xml);
 
-console.log(textOutput);
+if (errors.length > 0) {
+    // The math holds something CellML Text can't write, e.g. an unknown element.
+    // Each error has a message and an XPath-style path to the node.
+    // Editing and re-parsing this text would lose it, so don't offer the text for editing.
+    console.warn(errors);
+} else {
+    console.log(text);
+}
 
 ```
+
+`generate(xml)` still returns just the text. Anything it can't write is marked `#unsupported:…#` in the text, so the text won't parse until the marker is removed. Nothing is dropped silently.
 
 ### 3. Generate LaTeX for Equations
 
@@ -117,6 +126,35 @@ if (errors.length === 0) {
 
 Managed mode currently only supports simplified text.
 
+## Supported Math
+
+The parser only emits MathML from the CellML 2.0 subset, so a successful parse is always valid CellML math. Anything else is a parse error.
+
+| Text | MathML | Arguments |
+|---|---|---|
+| `a + b`, `a - b`, `a * b`, `a / b`, `-a`, `+a` | `plus`, `minus`, `times`, `divide` | |
+| `a == b`, `a != b`, `a < b`, `a <= b`, `a > b`, `a >= b` | `eq`, `neq`, `lt`, `leq`, `gt`, `geq` | |
+| `a and b`, `a or b` | `and`, `or` | |
+| `sqrt(x)` | `<root/>x` | 1 |
+| `root(x, n)` | `<root/><degree>n</degree>x` | 2 |
+| `log(x)` | `<log/>x` (base 10) | 1 |
+| `log(x, b)` | `<log/><logbase>b</logbase>x` | 2 |
+| `ode(x, t)` | `<diff/><bvar><ci>t</ci></bvar>x` | 2 |
+| `ode(x, t, n)` | `<diff/><bvar><ci>t</ci><degree>n</degree></bvar>x` | 3 |
+| `power(a, b)`, `rem(a, b)` | as named | 2 |
+| `min(…)`, `max(…)` | as named | 2 or more |
+| `abs exp ln floor ceiling` | as named | 1 |
+| `sin cos tan sec csc cot`, their hyperbolic (`sinh`, …) and `arc` (`arcsin`, `arcsinh`, …) forms | as named | 1 |
+| `not(c)` | `not` | 1 |
+| `xor(c, d, …)` | `xor` | 2 or more |
+| `sel case c: v; … otherwise: v; endsel` | `piecewise` | |
+
+- **Precedence:** from loosest to tightest, `or`, then `and`, then comparisons, then `+ -`, then `* /`, then unary `-`/`+`. Brackets can group any expression or condition, e.g. `(a > b or c) and d`.
+- **Brackets in generated text:** the generator only writes the brackets the math needs, e.g. `a + b * c` and `(a + b) * c`. Brackets you type stay in your text while you edit it, but they aren't stored in the XML.
+- **Numbers:** `1`, `2.5`, `.5` and `1.5e-3`, optionally with units: `2 {mV}`. A number without units is `dimensionless`. E-notation is written as `<cn type="e-notation">1.5<sep/>-3</cn>`.
+- **Reserved names:** `e`, `pi`, `inf`, `infinity`, `NaN`, `true` and `false` are constants, and the keywords (`def`, `model`, `comp`, `enddef`, `as`, `var`, `unit`, `sel`, `case`, `otherwise`, `endsel`, `and`, `or`) are syntax. None of them can be used as a variable name.
+- **Unknown functions** are errors, with a hint where one helps: `Unknown function 'ceil'. Did you mean 'ceiling'?`
+
 ## Configuration
 
 You can configure the parser to tag the output XML with source line numbers. This is enabled by default to help build editor integrations (like highlighting the source line when clicking a diagram).
@@ -157,7 +195,14 @@ yarn dev
 
 ```
 
-4. **Build the library:**
+4. **Run the tests:**
+The tests check every successful parse against libCellML's validator, and round-trip the bundled module libraries in `src/assets/cellml/`.
+```bash
+yarn test
+
+```
+
+5. **Build the library:**
 Produces the `dist/` folder ready for publishing.
 ```bash
 yarn build

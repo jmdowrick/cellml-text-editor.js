@@ -57,6 +57,8 @@ export class CellMLModelSession {
   private _xml = ''
   private _text = ''
   private _errors: ParserError[] = []
+  /** What the loaded XML has that the text can't hold (line 0: they belong to the XML). */
+  private _generatorErrors: ParserError[] = []
   private _simple = false
   private _componentName = ''
   private _analysis: ModelAnalysis = EMPTY_ANALYSIS
@@ -89,7 +91,7 @@ export class CellMLModelSession {
     return this._xml
   }
   get errors() {
-    return this._errors
+    return [...this._generatorErrors, ...this._errors]
   }
   get simple() {
     return this._simple
@@ -222,7 +224,12 @@ export class CellMLModelSession {
   // --- Internals -----------------------------------------------------------
 
   private regenerateText() {
-    this._text = this._xml ? this.generator.generate(this._xml) : ''
+    const result = this._xml ? this.generator.generateResult(this._xml) : { text: '', errors: [] }
+    this._text = result.text
+    this._generatorErrors = result.errors.map((e) => ({
+      line: 0,
+      message: e.path ? `${e.message} (at ${e.path})` : e.message,
+    }))
     this.textRevision++
   }
 

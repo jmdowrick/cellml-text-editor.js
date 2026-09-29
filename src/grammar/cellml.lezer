@@ -110,17 +110,19 @@ const<word> { @specialize[@name=MathConstant]<identifier, word> }
 
 // --- SPECIFIC LISTS ---
 
+// Must match FUNCTIONS in src/lib/CellMLMathML.ts ('ode' is a keyword above).
 MathFunction { 
   fn<"sin"> | fn<"cos"> | fn<"tan"> | fn<"sec"> | fn<"csc"> | fn<"cot"> | 
   fn<"sinh"> | fn<"cosh"> | fn<"tanh"> | fn<"sech"> | fn<"csch"> | fn<"coth"> |
   fn<"arcsin"> | fn<"arccos"> | fn<"arctan"> | fn<"arcsec"> | fn<"arccsc"> | fn<"arccot"> |
   fn<"arcsinh"> | fn<"arccosh"> | fn<"arctanh"> | fn<"arcsech"> | fn<"arccsch"> | fn<"arccoth"> |
-  fn<"exp"> | fn<"log"> | fn<"ln"> | fn<"power"> | fn<"sqrt"> | fn<"abs"> | 
-  fn<"floor"> | fn<"ceiling"> | fn<"min"> | fn<"max"> | fn<"rem"> | fn<"diff"> | fn<"mode">
+  fn<"exp"> | fn<"log"> | fn<"ln"> | fn<"power"> | fn<"sqrt"> | fn<"root"> | fn<"abs"> |
+  fn<"floor"> | fn<"ceiling"> | fn<"min"> | fn<"max"> | fn<"rem"> | fn<"not"> | fn<"xor">
 }
 
+// Must match CONSTANTS in src/lib/CellMLMathML.ts.
 MathConstant {
-  const<"pi"> | const<"exponentiale"> | const<"true"> | const<"false"> | const<"infinity"> | const<"NaN">
+  const<"pi"> | const<"e"> | const<"true"> | const<"false"> | const<"inf"> | const<"infinity"> | const<"NaN">
 }
 
 @tokens {

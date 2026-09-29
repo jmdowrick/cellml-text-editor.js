@@ -20,6 +20,7 @@ jobs:
       - name: Enable corepack
         run: corepack enable yarn
       - run: yarn
+      - run: yarn test
       - run: yarn build
       - name: Determine npm tag
         id: determine_tag
