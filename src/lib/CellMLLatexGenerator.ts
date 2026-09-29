@@ -27,6 +27,64 @@ const CONSTANTS: Record<string, string> = {
   false: '\\mathrm{false}',
 }
 
+/**
+ * Greek letters drawn from their names, matched case-sensitively. This is
+ * vue3-math-editor's list, less pi (a variable called pi isn't the constant)
+ * and omicron (it looks the same as o).
+ */
+const GREEK = new Set([
+  'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'varepsilon', 'zeta', 'eta', 'theta',
+  'vartheta', 'iota', 'kappa', 'lambda', 'mu', 'nu', 'xi', 'rho', 'sigma', 'tau',
+  'upsilon', 'phi', 'varphi', 'chi', 'psi', 'omega', 'Gamma', 'Delta', 'Theta', 'Lambda',
+  'Xi', 'Pi', 'Sigma', 'Upsilon', 'Phi', 'Psi', 'Omega',
+])
+
+/** A name with scripts: a base, then parts each after one or two underscores. */
+const SCRIPTED_NAME = /^[^_]+(__?[^_]+)+$/
+
+/**
+ * One word of a name: a single letter as itself, digits as a number, a Greek
+ * letter's name (perhaps with digits after it) as the letter, and anything
+ * else in \mathit, so Kr reads as one word rather than K times r. Nothing the
+ * generator writes straight after a name is a letter, so \alpha needs no space.
+ */
+function word(text: string): string {
+  const greek = /^([A-Za-z]+?)(\d*)$/.exec(text)
+  if (greek && GREEK.has(greek[1]!)) return `\\${text}`
+  return text.length <= 1 || /^\d+$/.test(text) ? text : `\\mathit{${text}}`
+}
+
+/**
+ * The LaTeX for a variable name, the same as vue3-math-editor draws it.
+ *
+ * The base is the name up to its first underscore. `_part` adds a subscript
+ * and `__part` a superscript; several of either are joined with commas, in the
+ * order written. A name with a superscript is braced, so it reads back as the
+ * name rather than a power. A name with three or more underscores in a row, or
+ * a leading or trailing one, is drawn as typed.
+ *
+ * Examples: V_m is V_{m}, C_Ca_i is C_{\mathit{Ca},i}, g_Kr__max is
+ * {g_{\mathit{Kr}}^{\mathit{max}}}, and a___b is \mathit{a\_\_\_b}.
+ */
+export function formatIdentifier(name: string): string {
+  if (!name.includes('_')) return word(name)
+  if (!SCRIPTED_NAME.test(name)) {
+    const escaped = name.replace(/_/g, '\\_')
+    return name.length === 1 ? escaped : `\\mathit{${escaped}}`
+  }
+
+  const base = name.slice(0, name.indexOf('_'))
+  const sub: string[] = []
+  const sup: string[] = []
+  for (const [, underscores, part] of name.matchAll(/(__?)([^_]+)/g)) {
+    const scripts = underscores === '_' ? sub : sup
+    scripts.push(word(part!))
+  }
+
+  const latex = `${word(base)}${sub.length ? `_{${sub.join(',')}}` : ''}${sup.length ? `^{${sup.join(',')}}` : ''}`
+  return sup.length ? `{${latex}}` : latex
+}
+
 export class CellMLLatexGenerator {
   public convert(mathMLNode: Element): string {
     if (!mathMLNode) return ''
@@ -65,7 +123,7 @@ export class CellMLLatexGenerator {
     const tag = node.localName
 
     if (tag === 'apply') return this.parseApply(node, contextPrecedence)
-    if (tag === 'ci') return this.parseIdentifier(node.textContent || '')
+    if (tag === 'ci') return formatIdentifier(node.textContent?.trim() ?? '')
     if (tag === 'cn') {
       const type = node.getAttribute('type')
       if (type === 'e-notation') {
@@ -102,83 +160,6 @@ export class CellMLLatexGenerator {
 
     console.warn(`Unsupported MathML node: ${tag}`)
     return ''
-  }
-
-  private escapeGreek(text: string): string {
-    const greek = [
-      'alpha',
-      'beta',
-      'gamma',
-      'delta',
-      'epsilon',
-      'zeta',
-      'eta',
-      'theta',
-      'iota',
-      'kappa',
-      'lambda',
-      'mu',
-      'nu',
-      'xi',
-      'omicron',
-      'pi',
-      'rho',
-      'sigma',
-      'tau',
-      'upsilon',
-      'phi',
-      'chi',
-      'psi',
-      'omega',
-    ]
-    return greek.includes(text.toLowerCase()) ? `\\${text}` : text
-  }
-
-  /**
-   * Specialized identifier formatter.
-   * Format: Base_Sub_Super_SubOfSuper
-   * Example: v_AQ_api_i -> v_{AQ}^{api_{i}}
-   */
-  private parseIdentifier(name: string): string {
-    // Handle simple cases (no underscores)
-    if (!name.includes('_')) {
-      return this.escapeGreek(name)
-    }
-
-    const parts = name.split('_')
-
-    // Base (e.g. 'v')
-    const base = this.escapeGreek(parts[0] || '')
-
-    const subParts = []
-    if (parts[1]) subParts.push(parts[1])
-    if (parts.length > 4) subParts.push(...parts.slice(4))
-
-    let superBlock = ''
-    if (parts.length === 3 && (parts[2] || []).length === 1) {
-      subParts.push(this.escapeGreek(parts[2] || ''))
-    } else if (parts[2]) {
-      superBlock = this.escapeGreek(parts[2])
-      if (parts[3]) {
-        superBlock += `_{${this.escapeGreek(parts[3])}}`
-      }
-    }
-    subParts.forEach((part, index) => {
-      subParts[index] = this.escapeGreek(part)
-    })
-    const subBlock = subParts.join(',')
-
-    let latex = base
-
-    if (subBlock) {
-      latex += `_{${subBlock}}`
-    }
-
-    if (superBlock) {
-      latex += `^{${superBlock}}`
-    }
-
-    return latex
   }
 
   private parseApply(node: Element | null | undefined, parentPrecedence: number): string {

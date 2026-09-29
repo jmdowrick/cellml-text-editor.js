@@ -81,9 +81,28 @@ import { CellMLLatexGenerator } from 'cellml-text-editor';
 const latexGen = new CellMLLatexGenerator();
 const latexString = latexGen.convert(mathNode);
 
-console.log(latexString); // e.g. "\frac{dV}{dt} = -I_{ion}"
+console.log(latexString); // e.g. "\frac{dV}{dt} = -I_{\mathit{ion}}"
 
 ```
+
+#### Variable names
+
+Underscores in a variable name are drawn as subscripts and superscripts, the same way as [vue3-math-editor](https://github.com/vue3-repos/vue3-math-editor) draws them:
+
+- The **base** is the name up to its first underscore.
+- One underscore starts a **subscript** and two start a **superscript**. Several of either are joined with commas, in the order written.
+- A name with three or more underscores in a row, or a leading or trailing underscore, is drawn **as typed**.
+- A single letter is in maths italic, digits are upright, a Greek letter's name (optionally followed by digits) is the letter, and any other word is in `\mathit`, so `Kr` reads as one word rather than K·r. Greek names are case-sensitive (`alpha`, `Delta`), and `pi` isn't one of them because it is the constant.
+
+| Name | LaTeX |
+|---|---|
+| `V_m` | `V_{m}` |
+| `C_Ca_i` | `C_{\mathit{Ca},i}` |
+| `g_Kr__max` | `{g_{\mathit{Kr}}^{\mathit{max}}}` |
+| `tau_m_Na1_6` | `\tau_{m,\mathit{Na1},6}` |
+| `a___b` | `\mathit{a\_\_\_b}` |
+
+A name with a superscript is braced, which keeps the output identical to vue3-math-editor's. `formatIdentifier(name)` returns the LaTeX for one name, so a host can draw names the same way elsewhere, such as in a list of variables.
 
 ### 4. Simplified vs. Advanced Text
 
