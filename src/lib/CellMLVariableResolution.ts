@@ -86,6 +86,21 @@ export function analyzeModelXml(xml: string): ModelAnalysis | null {
   return analyzeModel(doc)
 }
 
+/** Every `<ci>` name in the component's math, in document order and with repeats. */
+export function referenceSequence(doc: XMLDocument | Document): string[] {
+  const component = firstComponent(doc)
+  if (!component) return []
+
+  const names: string[] = []
+  for (const math of Array.from(component.getElementsByTagNameNS(MATHML_NS, 'math'))) {
+    for (const ci of Array.from(math.getElementsByTagNameNS(MATHML_NS, 'ci'))) {
+      const name = ci.textContent?.trim()
+      if (name) names.push(name)
+    }
+  }
+  return names
+}
+
 function collectFromMath(math: Element | null | undefined, referenced: Set<string>, stateVariables: Set<string>) {
   if (!math) return
 

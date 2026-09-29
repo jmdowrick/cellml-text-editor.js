@@ -1,6 +1,6 @@
 {
   "name": "cellml-text-editor",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "A CellML text editor library for parsing and generating CellML text representations.",
   "keywords": [
     "cellml",

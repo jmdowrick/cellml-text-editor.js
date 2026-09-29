@@ -50,6 +50,7 @@ export enum TokenType {
 export class CellMLTextScanner {
   private input: string
   private pos: number = 0
+  private tokenStart: number = 0
   private line: number = 1
   private length: number
   private currentToken: TokenType = TokenType.EOF
@@ -67,11 +68,19 @@ export class CellMLTextScanner {
   public get value(): string {
     return this.currentValue
   }
+  /** Offset of the current token in the input; it ends where the next one's whitespace begins. */
+  public get start(): number {
+    return this.tokenStart
+  }
+  public get end(): number {
+    return this.pos
+  }
 
   // Advance to the next token
   public nextToken(): void {
     const linesSkipped = this.skipWhitespace()
     this.line += linesSkipped
+    this.tokenStart = this.pos
 
     if (this.pos >= this.length) {
       this.currentToken = TokenType.EOF

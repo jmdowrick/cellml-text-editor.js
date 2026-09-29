@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.1
+
+Renaming a variable in Simple Mode keeps its units and initial value.
+
+### Fixed
+
+- **A renamed variable keeps its declaration.** Changing `V` to `Vm` in the equations used to list `Vm` as a new variable with no units or initial value. The session now matches the old and new `<ci>` names, so `Vm` takes over `V`'s units and initial value. This still works when the name is typed a letter at a time, or when an edit briefly fails to parse. A name that is already in use keeps its own units.
+
+### Added
+
+- **Rename everywhere.** When only some uses of a variable are renamed, the new name gets a copy of its units and initial value, and the panel offers to rename the remaining uses. The text is edited in place, so formatting and comments are kept.
+- `detectRenames(before, after)` pairs the variables renamed between two lists of `<ci>` names. `renameIdentifier(text, from, to)` renames a variable in Simple Mode text, leaving function names and units annotations alone. Together they let a host that manages variables itself do the same.
+
 ## 0.5.0
 
 Variable names in the LaTeX output follow the same convention as vue3-math-editor, so a model looks the same in both.
