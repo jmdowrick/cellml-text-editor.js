@@ -1,6 +1,6 @@
 @top Program { expression* }
 
-@skip { space }
+@skip { space | Comment }
 
 @precedence {
   times @left,
@@ -132,6 +132,10 @@ MathConstant {
   Number { $[0-9]+ ($[.] $[0-9]+)? ($[eE] $[+\-]? $[0-9]+)? }
   
   space { $[ \t\n\r]+ }
+
+  Comment { "//" ![\n]* }
+
+  @precedence { Comment, "/" }
   
   "(" ")" "{" "}" "=" ":" ";" ","
 }

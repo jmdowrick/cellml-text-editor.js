@@ -55,6 +55,7 @@ export class CellMLTextScanner {
   private length: number
   private currentToken: TokenType = TokenType.EOF
   private currentValue: string = ''
+  private _prevTokenEnd: number = 0
 
   constructor(input: string) {
     this.input = input
@@ -75,9 +76,14 @@ export class CellMLTextScanner {
   public get end(): number {
     return this.pos
   }
+  /** Where the previous token ended, so `input.slice(start, prevTokenEnd)` is what was just consumed. */
+  public get prevTokenEnd(): number {
+    return this._prevTokenEnd
+  }
 
   // Advance to the next token
   public nextToken(): void {
+    this._prevTokenEnd = this.pos
     const linesSkipped = this.skipWhitespace()
     this.line += linesSkipped
     this.tokenStart = this.pos

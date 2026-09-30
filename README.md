@@ -6,8 +6,9 @@ This library provides a bi-directional bridge between the human-readable CellML 
 
 ## Features
 
-* **Robust Parsing:** Handles complex nested logic, comments, and operator precedence.
+* **Robust Parsing:** Handles complex nested logic and operator precedence.
 * **Bi-directional:** Convert CellML Text → XML and XML → CellML Text.
+* **Keeps your layout:** Comments, blank lines and the way each equation was typed are saved in a layout file beside the CellML, and come back when the text is generated again.
 * **LaTeX Generation:** Instantly convert MathML logic into display-ready LaTeX strings.
 * **Error Reporting:** Precise syntax error tracking with line numbers.
 * **Source Tracking:** Maps output XML/MathML back to original source lines (great for debuggers/editors).
@@ -30,9 +31,9 @@ yarn add cellml-text-editor
 import { CellMLTextParser } from 'cellml-text-editor';
 
 const code = `
-def model my_model
-    def comp my_component
-        var a: dimension_less {init: 10};
+def model my_model as
+    def comp my_component as
+        var a: dimensionless {init: 10};
     enddef;
 enddef;
 `;
@@ -104,46 +105,88 @@ Underscores in a variable name are drawn as subscripts and superscripts, the sam
 
 A name with a superscript is braced, which keeps the output identical to vue3-math-editor's. `formatIdentifier(name)` returns the LaTeX for one name, so a host can draw names the same way elsewhere, such as in a list of variables.
 
-### 4. Simplified vs. Advanced Text
+### 4. Simple and Advanced Text
 
-`CellMLTextGenerator` can produce two styles of text, via `simplified`. Advanced writes out every `def model`, `def comp`, and `var` declaration explicitly; simplified reads as short `comp foo { ... }` blocks, and — combined with `managed: true` — hides variable declarations entirely, for cases where they're supplied externally rather than typed by hand.
+Both the parser and the generator take `simplified`.
+
+- **Advanced** text is a whole model: `def model … as`, its `def comp … as` blocks and their `var` lines.
+- **Simple** text is the equations of one component, with nothing around them. The generator writes the model's first component. The parser takes the component's name from `ParseContext.componentName`, and the model's name from `ParseContext.baseXml`, the model being edited.
 
 ```typescript
-import { CellMLTextGenerator } from 'cellml-text-editor';
+import { CellMLTextGenerator, CellMLTextParser } from 'cellml-text-editor';
 
-const advanced = new CellMLTextGenerator({ simplified: false });
-const simplified = new CellMLTextGenerator({ simplified: true, managed: true });
+const text = new CellMLTextGenerator({ simplified: true }).generate(xml);
+const result = new CellMLTextParser({ simplified: true }).parse(text, { baseXml: xml, componentName: 'membrane' });
 
 ```
 
-### 5. Externally Managed Variables
+### 5. Declaring Variables Outside the Text
 
-In managed mode, a component's math can reference variables that aren't declared anywhere in the text. `resolveManagedVariables` looks up whatever's missing via a `VariableResolver` you provide, and writes the result onto the parsed XML.
+Simple text has no `var` lines, so its variables are declared by the host. `analyzeModel` lists what a component's math uses, and `applyVariableDefinitions` declares variables, typically from `ParseContext.finalise`, which runs before the XML is written.
 
 ```typescript
-import { CellMLTextParser, resolveManagedVariables, type VariableResolver } from 'cellml-text-editor';
+import { CellMLTextParser, analyzeModel, applyVariableDefinitions } from 'cellml-text-editor';
 
-const myResolver: VariableResolver = {
-    async resolveVariables(request) {
-        // request.componentName, request.variableNames, request.stateVariableNames
-        return {
-            resolved: [{ name: 'i_Ion', units: 'microA_per_cm2', interface: 'public' }],
-            unresolved: [],
-        };
-    },
-};
+const parser = new CellMLTextParser({ simplified: true });
+const result = parser.parse(text, {
+    componentName: 'membrane',
+    finalise: (doc) => applyVariableDefinitions(doc, [
+        { name: 'V', units: 'millivolt', initialValue: '-65' },
+        { name: 't', units: 'millisecond' },
+    ]),
+});
 
-const parser = new CellMLTextParser();
-const { xml, errors } = parser.parse(cellmlTextSource);
+const analysis = analyzeModel(result.doc!); // analysis.unresolved: variables still without units
 
-if (errors.length === 0) {
-    await resolveManagedVariables(parser.doc, myResolver);
-    const finalXml = '<?xml version="1.0" encoding="UTF-8"?>\n' + parser.serialize(parser.doc.documentElement);
+```
+
+### 6. Keeping Comments and Layout
+
+CellML can't hold comments, so the parser records everything the XML leaves out in a **layout**:
+
+- comments and blank lines;
+- each statement as it was typed, with its line breaks, spacing and extra brackets;
+- the order of the `var` lines among the equations.
+
+Units always come from the XML, since the text doesn't hold them; the layout keeps only the comments around a `def unit` block.
+
+Save the layout beside the model, e.g. as `model.layout.json`, and pass it back when generating the text:
+
+```typescript
+import { CellMLTextGenerator, CellMLTextParser, parseLayout, serializeLayout } from 'cellml-text-editor';
+
+// Saving (xml and layout are null when the text doesn't parse)
+const { xml, layout } = new CellMLTextParser().parse(text);
+if (xml && layout) {
+    writeFile('model.cellml', xml);
+    writeFile('model.layout.json', serializeLayout(layout));
 }
 
+// Loading
+const restored = parseLayout(readFile('model.layout.json')); // null if it isn't a layout
+const sameText = new CellMLTextGenerator({ simplified: false }).generate(readFile('model.cellml'), { layout: restored });
+
 ```
 
-Managed mode currently only supports simplified text.
+**The layout never changes the math.**
+
+- Each statement is written as it was typed only when its math still matches the XML.
+- An equation changed by another tool is regenerated, but keeps its comments. Comments that were inside it move above it.
+- A statement that has gone leaves its comments behind.
+- New equations appear in the XML's order.
+- As a final check, the generator parses its own text. If the result differs from what it would have written without the layout, it drops the layout and sets `layoutRejected`. This is not expected to happen.
+- The layout file needs no trust: lines that aren't comments are ignored, and a statement's text is only used if it parses to exactly the one statement it claims to be.
+
+**The same layout works in both modes.** Simple text shows the component's equations with their comments. Its `var` lines, and their comments, stay in the layout for Advanced text. After an edit in Simple Mode, `mergeSimpleLayout(previous, result.layout)` combines the two.
+
+**Normal form.** Text comes back exactly as typed when:
+
+- it has `\n` line endings and no trailing spaces;
+- the `def … as` and `enddef;` lines are laid out as the generator writes them;
+- each statement starts on its own line;
+- every comment is indented at least as far as the line after it (and to the body indent before an `enddef;`).
+
+Any other text reaches that form after one round trip, keeping every comment. For example, `a = 1; b = 2;` becomes two lines.
 
 ## Supported Math
 
@@ -169,7 +212,7 @@ The parser only emits MathML from the CellML 2.0 subset, so a successful parse i
 | `sel case c: v; … otherwise: v; endsel` | `piecewise` | |
 
 - **Precedence:** from loosest to tightest, `or`, then `and`, then comparisons, then `+ -`, then `* /`, then unary `-`/`+`. Brackets can group any expression or condition, e.g. `(a > b or c) and d`.
-- **Brackets in generated text:** the generator only writes the brackets the math needs, e.g. `a + b * c` and `(a + b) * c`. Brackets you type stay in your text while you edit it, but they aren't stored in the XML.
+- **Brackets in generated text:** the generator only writes the brackets the math needs, e.g. `a + b * c` and `(a + b) * c`. Brackets you type aren't stored in the XML, but they are kept in the [layout](#6-keeping-comments-and-layout).
 - **Numbers:** `1`, `2.5`, `.5` and `1.5e-3`, optionally with units: `2 {mV}`. A number without units is `dimensionless`. E-notation is written as `<cn type="e-notation">1.5<sep/>-3</cn>`.
 - **Reserved names:** `e`, `pi`, `inf`, `infinity`, `NaN`, `true` and `false` are constants, and the keywords (`def`, `model`, `comp`, `enddef`, `as`, `var`, `unit`, `sel`, `case`, `otherwise`, `endsel`, `and`, `or`) are syntax. None of them can be used as a variable name.
 - **Unknown functions** are errors, with a hint where one helps: `Unknown function 'ceil'. Did you mean 'ceiling'?`
@@ -208,14 +251,14 @@ yarn
 ```
 
 3. **Run the test playground:**
-This launches a Vue 3 app that lets you type CellML Text and see real-time XML and LaTeX previews.
+This launches a Vue 3 app that lets you type CellML Text and see real-time XML and LaTeX previews. **Save** downloads the CellML and its layout, and **Open** loads them back; select both files.
 ```bash
 yarn dev
 
 ```
 
 4. **Run the tests:**
-The tests check every successful parse against libCellML's validator, and round-trip the bundled module libraries in `src/assets/cellml/`.
+The tests check every successful parse against libCellML's validator, and round-trip the bundled module libraries in `src/assets/cellml/`, with and without comments and a layout.
 ```bash
 yarn test
 

@@ -185,3 +185,48 @@ export function isCellMLInteger(text: string): boolean {
 export function isCellMLReal(text: string): boolean {
   return /^-?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(text)
 }
+
+/** The cellml:units of a <cn>, whatever prefix it was written with. */
+export function unitsOf(cn: Element): string | undefined {
+  const attr = Array.from(cn.attributes).find((a) => a.name === 'units' || a.name.endsWith(':units'))
+  return attr?.value
+}
+
+/**
+ * A compact, whitespace-free spelling of a MathML tree, e.g. `(root (degree 3) x)`.
+ * Two trees with the same fingerprint are the same math. Constants print as `#pi`,
+ * e-notation as `1E-3`, and units other than dimensionless as `2{mV}`.
+ */
+export function mathFingerprint(node: Element): string {
+  const tag = node.localName
+  if (tag === 'ci') return node.textContent?.trim() ?? ''
+  if (tag === 'cn') {
+    const value =
+      node.getAttribute('type') === 'e-notation'
+        ? Array.from(node.childNodes)
+            .map((c) => (c.nodeType === 1 ? 'E' : (c.textContent?.trim() ?? '')))
+            .join('')
+        : (node.textContent?.trim() ?? '')
+    const units = unitsOf(node)
+    return units && units !== 'dimensionless' ? `${value}{${units}}` : value
+  }
+
+  const children = Array.from(node.children)
+  if (tag === 'apply') {
+    // <sqrt/> is the legacy spelling of <root/>.
+    const op = children[0]?.localName === 'sqrt' ? 'root' : (children[0]?.localName ?? '?')
+    return `(${[op, ...children.slice(1).map(mathFingerprint)].join(' ')})`
+  }
+  if (children.length === 0) return `#${tag}`
+  return `(${[tag, ...children.map(mathFingerprint)].join(' ')})`
+}
+
+/** A <variable> as the text writes it: name, units, initial value and interface (public when missing). */
+export function variableFingerprint(variable: Element): string {
+  return [
+    variable.getAttribute('name'),
+    variable.getAttribute('units'),
+    variable.getAttribute('initial_value') ?? '',
+    variable.getAttribute('interface') || 'public',
+  ].join('|')
+}

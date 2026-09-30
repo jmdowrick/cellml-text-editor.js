@@ -7,6 +7,25 @@
       </div>
 
       <div class="mode-toggles">
+        <div class="file-actions">
+          <button
+            type="button"
+            class="file-button"
+            title="Open a .cellml file, and the .layout.json saved with it (select both), or a layout on its own for the current model"
+            @click="fileInput?.click()"
+          >
+            Open…
+          </button>
+          <button
+            type="button"
+            class="file-button"
+            title="Download the CellML and its layout (comments, blank lines and how each equation was typed)"
+            @click="save"
+          >
+            Save
+          </button>
+          <input ref="fileInput" type="file" multiple accept=".cellml,.xml,.json" hidden @change="open" />
+        </div>
         <label
           class="switch"
           title="Simple mode: equations only. The model name is kept from the XML, the component name is set below, and variables are declared from the panel."
@@ -151,6 +170,7 @@ import katex from 'katex'
 import 'katex/dist/katex.min.css'
 
 import { CellMLModelSession } from './lib/CellMLModelSession'
+import { parseLayout, serializeLayout } from './lib/CellMLTextLayout'
 import { cellml } from './lib/CellMLLanguage'
 
 // @ts-ignore
@@ -346,6 +366,52 @@ watch(textOutput, (text) => {
   textDebouncer = setTimeout(() => session.setText(text), 500)
 })
 
+// --- Files ------------------------------------------------------------------
+
+// CellML can't hold comments, so they are saved beside it in <model>.layout.json.
+const fileInput = ref<HTMLInputElement | null>(null)
+
+function download(name: string, text: string, type: string) {
+  const url = URL.createObjectURL(new Blob([text], { type }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+function save() {
+  // Take in any typing the debounce hasn't passed on yet.
+  if (textDebouncer) clearTimeout(textDebouncer)
+  session.setText(textOutput.value)
+  if (session.errors.length > 0 && !window.confirm('The text has errors, so the last version that parsed will be saved. Save anyway?')) return
+
+  const name = session.modelName || 'model'
+  download(`${name}.cellml`, session.xml, 'application/xml')
+  if (session.layout) download(`${name}.layout.json`, serializeLayout(session.layout), 'application/json')
+}
+
+async function open(event: Event) {
+  const input = event.target as HTMLInputElement
+  const files = Array.from(input.files ?? [])
+  input.value = '' // so the same files can be opened again
+
+  let xml: string | null = null
+  let layout = null
+  for (const file of files) {
+    const text = await file.text()
+    const asLayout = parseLayout(text)
+    if (asLayout) layout = asLayout
+    else xml = text
+  }
+  if (!xml && !layout) {
+    window.alert('Choose a .cellml file, a .layout.json file, or both.')
+    return
+  }
+  // A layout on its own is applied to the model already open.
+  session.setXml(xml ?? session.xml, layout)
+}
+
 // --- LaTeX preview ----------------------------------------------------------
 
 const cursorLine = ref(1)
@@ -459,8 +525,35 @@ onMounted(async () => {
 
 .mode-toggles {
   display: flex;
+  align-items: center;
   gap: 20px;
   flex-wrap: wrap;
+}
+
+.file-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.file-button {
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 0.8125rem;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.file-button:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.file-button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 .switch {

@@ -2,6 +2,7 @@ import { CellMLTextGenerator } from './CellMLTextGenerator'
 import { CellMLTextParser, type ParserError } from './CellMLTextParser'
 import { CellMLLatexGenerator } from './CellMLLatexGenerator'
 import { detectRenames, renameIdentifier } from './CellMLRename'
+import { mergeSimpleLayout, type TextLayout } from './CellMLTextLayout'
 import {
   analyzeModel,
   applyVariableDefinitions,
@@ -75,6 +76,8 @@ export class CellMLModelSession {
   private _componentName = ''
   private _analysis: ModelAnalysis = EMPTY_ANALYSIS
   private doc: XMLDocument | null = null
+  /** How the text was written (comments, blank lines, …), saved alongside the XML. */
+  private _layout: TextLayout | null = null
   /** The `<ci>` names of the last good parse, in order: what the next edit is compared against. */
   private references: string[] = []
   private _pendingRename: PendingRename | null = null
@@ -104,6 +107,10 @@ export class CellMLModelSession {
   }
   get xml() {
     return this._xml
+  }
+  /** The layout of the last text that parsed, to save with the XML (see serializeLayout). */
+  get layout() {
+    return this._layout
   }
   get errors() {
     return [...this._generatorErrors, ...this._errors]
@@ -167,9 +174,13 @@ export class CellMLModelSession {
 
   // --- Editing -------------------------------------------------------------
 
-  /** Loads a model. Its variables' units and initial values seed the panel. */
-  setXml(xml: string) {
+  /**
+   * Loads a model, and the layout saved with it, if any. Its variables' units
+   * and initial values seed the panel.
+   */
+  setXml(xml: string, layout: TextLayout | null = null) {
     this._xml = xml
+    this._layout = layout
     this.units.clear()
     this.initials.clear()
     this.references = []
@@ -265,7 +276,7 @@ export class CellMLModelSession {
   // --- Internals -----------------------------------------------------------
 
   private regenerateText() {
-    const result = this._xml ? this.generator.generateResult(this._xml) : { text: '', errors: [] }
+    const result = this._xml ? this.generator.generateResult(this._xml, { layout: this._layout }) : { text: '', errors: [] }
     this._text = result.text
     this._generatorErrors = result.errors.map((e) => ({
       line: 0,
@@ -345,6 +356,10 @@ export class CellMLModelSession {
     if (result.xml && result.doc) {
       this._xml = result.xml
       this.doc = result.doc
+      // Simple Mode text holds one component's equations; the rest of the layout is kept.
+      if (result.layout) {
+        this._layout = result.layout.model ? result.layout : mergeSimpleLayout(this._layout, result.layout)
+      }
       this._analysis = analyzeModel(result.doc)
       this.references = referenceSequence(result.doc)
       // Advanced Mode: the text names the component.
