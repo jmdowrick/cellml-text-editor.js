@@ -12,5 +12,7 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     include: ['src/**/__tests__/**/*.test.ts'],
+    // The corpus tests run whole module libraries under jsdom; with the suite in parallel, 5s is too tight.
+    testTimeout: 30_000,
   },
 })
