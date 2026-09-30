@@ -165,14 +165,17 @@ async function kindsBothWays(xml: string) {
   return { ours, theirs: await analyserKinds(xml, externals) }
 }
 
-/** Expects libcellml to accept the model and classify every referenced variable as we do. */
-async function expectAgreement(xml: string, label?: string) {
-  const { ours, theirs } = await kindsBothWays(xml)
+/** Expects libcellml to have accepted the model and classified every referenced variable as we do. */
+function expectSameKinds(xml: string, { ours, theirs }: Awaited<ReturnType<typeof kindsBothWays>>, label?: string) {
   expect(theirs, label).not.toBeNull()
   const referenced = analyzeModelXml(xml)!.referenced
   const sorted = (kinds: Map<string, VariableKind>, names: Iterable<string>) =>
     [...names].sort().map((name) => [name, kinds.get(name)])
   expect(sorted(ours, referenced), label).toEqual(sorted(theirs!, referenced))
+}
+
+async function expectAgreement(xml: string, label?: string) {
+  expectSameKinds(xml, await kindsBothWays(xml), label)
 }
 
 describe('agrees with libcellml', () => {
@@ -233,15 +236,16 @@ describe('agrees with libcellml', () => {
       for (const { name, xml } of await corpusComponents(file)) {
         if (KNOWN_DIFFERENCES.has(`${file}/${name}`)) continue
         const label = `${file}, component ${name}`
-        if ((await kindsBothWays(xml)).theirs === null) {
+        const kinds = await kindsBothWays(xml)
+        if (kinds.theirs === null) {
           // The only reason libcellml may reject a corpus component: it uses a variable it doesn't declare.
           expect(analyzeModelXml(xml)!.unresolved, label).not.toEqual([])
           continue
         }
-        await expectAgreement(xml, label)
+        expectSameKinds(xml, kinds, label)
         compared++
       }
-    })
+    }, 60_000) // BG_modules alone takes about 3s locally, and longer on CI
 
     // Runs after the files above, so the corpus can't pass by comparing nothing. 251 of 260 on libcellml 0.7.1.
     test('compares most components', () => {
