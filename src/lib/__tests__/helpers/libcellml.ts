@@ -129,33 +129,40 @@ export async function analyserKinds(xml: string, externals: Iterable<string>): P
   const parser = new lib.Parser(false)
   const analyser = new lib.Analyser()
   const model = parser.parseModel(xml)
+  // Every getter returns a new handle that must be deleted, or Embind reports it as leaked.
+  const handles: any[] = []
+  const own = <T>(handle: T): T => {
+    if (handle) handles.push(handle)
+    return handle
+  }
   try {
-    const component = model.componentByIndex(0)
+    const component = own(model.componentByIndex(0))
     if (!component) return null
     for (let i = 0; i < component.variableCount(); i++) {
-      const variable = component.variableByIndex(i)
+      const variable = own(component.variableByIndex(i))
       variable.setUnitsByName('dimensionless')
       if (variable.initialValue() && !NUMERIC_LITERAL.test(variable.initialValue())) variable.setInitialValueByString('0')
     }
     component.setMath(component.math().replace(/(cellml:units=)"[^"]*"/g, '$1"dimensionless"'))
 
     for (const name of externals) {
-      const variable = component.variableByName(name)
+      const variable = own(component.variableByName(name))
       if (variable) analyser.addExternalVariableByVariable(variable)
     }
     analyser.analyseModel(model)
-    const analysed = analyser.analyserModel()
+    const analysed = own(analyser.analyserModel())
     if (!analysed.isValid()) return null
 
     const typeNames = new Map(Object.entries(lib.AnalyserVariable.Type).map(([key, value]) => [value, key]))
     const kinds = new Map<string, VariableKind>()
     for (let i = 0; i < component.variableCount(); i++) {
-      const variable = component.variableByIndex(i)
-      const kind = ANALYSER_KINDS[typeNames.get(analysed.analyserVariable(variable)?.type()) as string]
+      const variable = own(component.variableByIndex(i))
+      const kind = ANALYSER_KINDS[typeNames.get(own(analysed.analyserVariable(variable))?.type()) as string]
       if (kind) kinds.set(variable.name(), kind)
     }
     return kinds
   } finally {
+    for (const handle of handles.reverse()) handle.delete()
     model.delete()
     parser.delete()
     analyser.delete()
