@@ -1,3 +1,6 @@
+// @vitest-environment jsdom
+// KaTeX warns about quirks mode under happy-dom, which has no document.compatMode.
+
 import fs from 'node:fs'
 import path from 'node:path'
 

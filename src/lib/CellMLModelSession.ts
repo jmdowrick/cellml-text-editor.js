@@ -43,6 +43,9 @@ const EMPTY_ANALYSIS: ModelAnalysis = {
   referenced: [],
   stateVariables: [],
   unresolved: [],
+  assigned: [],
+  voi: [],
+  dependencies: [],
 }
 
 /**
