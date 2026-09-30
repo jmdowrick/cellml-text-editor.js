@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.6.0
+
+Comments, blank lines and the way each equation was typed now survive a round trip through CellML. CellML can't hold them, so the parser records them in a **layout**, which is saved beside the model. Passed back to the generator, it gives the text as it was typed.
+
+### Added
+
+- **`ParserResult.layout`**: the layout of the text, or null when the text doesn't parse. The layout records:
+  - `//` comments and blank lines;
+  - each statement as typed, including line breaks, alignment and brackets the math doesn't need;
+  - the order of `var` lines among the equations;
+  - the comments around `def unit` blocks.
+
+  The option `recordLayout: false` turns recording off.
+- **`generate(xml, { layout })` and `generateResult(xml, { layout })`** write the text the way it was typed, wherever the math still matches:
+  - A statement changed elsewhere is regenerated, and keeps its comments.
+  - A statement that has gone leaves its comments behind.
+  - New equations appear in the XML's order.
+- **`serializeLayout(layout)` and `parseLayout(json)`** save and load a layout as JSON (`"format": "cellml-text-layout"`, `"version": 1`). `parseLayout` returns null for anything else.
+- **`mergeSimpleLayout(previous, simple)`** combines the layout of an edit in Simple Mode, which only shows equations, with the previous layout, so the `var` lines keep their comments and places.
+- **`GeneratorResult.layoutRejected`** is set if a layout would have changed the math and was ignored. This is not expected to happen.
+- **Scanner:** `tokenStart`, `prevTokenEnd` and `source`.
+- **Playground:** Open and Save buttons for a model and its `.layout.json`.
+
+### Guarantees
+
+- **The XML is unchanged.** The parser writes the same XML as 0.5, with or without recording a layout. The tests pin it with snapshots taken before this change.
+- **The default output is unchanged.** Without a layout, the generator writes the same text as 0.5.
+- **A layout never changes the math.**
+  - A statement's saved text is used only when it parses, on its own, to exactly one statement with the same math.
+  - Trivia lines that aren't blank or a comment are ignored.
+  - The generator also re-parses its own output, and ignores the layout if the meaning changed.
+  - A statement with something the text can't hold (`#unsupported:…#`) is always regenerated, so the marker is never hidden.
+
+### Notes
+
+- **Normal form:** text comes back exactly only in normal form, which the README describes. Other text reaches it after one round trip, keeping every comment. For example, `a = 1; b = 2;` is split onto two lines, and stray `;`s are dropped.
+- **What the text holds hasn't changed.**
+  - Simple Mode text is one component's equations.
+  - The text doesn't hold units or connections.
+  - So the layout keeps only the comments around a `def unit` block, and units in the text always come from the XML.
+
+### Fixed
+
+- **Editor highlighting:** `//` comments are highlighted as comments. The editor's grammar had no comment token, so each one showed as a syntax error, even though the parser accepted it.
+- **README:** corrected the Quick Start syntax, and replaced the sections describing a `managed` option and `resolveManagedVariables`, which don't exist.
+
 ## 0.5.0
 
 Variable names in the LaTeX output follow the same convention as vue3-math-editor, so a model looks the same in both.

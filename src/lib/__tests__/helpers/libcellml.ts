@@ -8,10 +8,19 @@ import { unitsOf } from './mathml'
 
 let instance: Promise<any> | null = null
 
-/** libcellml, loaded once per test file. The wasm is passed in so Emscripten never tries to fetch it. */
+/**
+ * libcellml, loaded once per test file. The wasm is instantiated here, so
+ * Emscripten never tries to fetch it: under jsdom it sees a `window` and may
+ * think it is in a browser.
+ */
 export function libcellml(): Promise<any> {
   const wasm = createRequire(import.meta.url).resolve('libcellml.js/libcellml.wasm')
-  instance ??= createLibCellML({ wasmBinary: fs.readFileSync(wasm) })
+  instance ??= createLibCellML({
+    instantiateWasm(imports, receive) {
+      WebAssembly.instantiate(fs.readFileSync(wasm), imports).then(({ instance }) => receive(instance))
+      return {}
+    },
+  })
   return instance
 }
 

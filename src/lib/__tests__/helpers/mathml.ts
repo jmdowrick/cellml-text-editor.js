@@ -1,40 +1,9 @@
 import { CellMLTextParser } from '../../CellMLTextParser'
-import { MATHML_NS } from '../../CellMLMathML'
+import { MATHML_NS, mathFingerprint, unitsOf } from '../../CellMLMathML'
 
-/** The cellml:units of a <cn>, whatever prefix it was written with. */
-export function unitsOf(cn: Element): string | undefined {
-  const attr = Array.from(cn.attributes).find((a) => a.name === 'units' || a.name.endsWith(':units'))
-  return attr?.value
-}
-
-/**
- * A compact, whitespace-free spelling of a MathML tree, for comparing trees and
- * writing expectations, e.g. `(root (degree 3) x)`. Constants print as `#pi`,
- * e-notation as `1E-3`, and units other than dimensionless as `2{mV}`.
- */
-export function sexpr(node: Element): string {
-  const tag = node.localName
-  if (tag === 'ci') return node.textContent?.trim() ?? ''
-  if (tag === 'cn') {
-    const value =
-      node.getAttribute('type') === 'e-notation'
-        ? Array.from(node.childNodes)
-            .map((c) => (c.nodeType === 1 ? 'E' : (c.textContent?.trim() ?? '')))
-            .join('')
-        : (node.textContent?.trim() ?? '')
-    const units = unitsOf(node)
-    return units && units !== 'dimensionless' ? `${value}{${units}}` : value
-  }
-
-  const children = Array.from(node.children)
-  if (tag === 'apply') {
-    // <sqrt/> is the legacy spelling of <root/>.
-    const op = children[0]?.localName === 'sqrt' ? 'root' : (children[0]?.localName ?? '?')
-    return `(${[op, ...children.slice(1).map(sexpr)].join(' ')})`
-  }
-  if (children.length === 0) return `#${tag}`
-  return `(${[tag, ...children.map(sexpr)].join(' ')})`
-}
+/** The math fingerprint, under the name the tests have always used. */
+export const sexpr = mathFingerprint
+export { unitsOf }
 
 /** Every equation in a document, in order, as sexpr strings. */
 export function equationsOf(doc: Document | Element): string[] {

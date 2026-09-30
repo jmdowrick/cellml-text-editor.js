@@ -1,0 +1,101 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Advanced Mode parse output > BG_modules.cellml 1`] = `"dcb870fcc903f5c6939ff07d559efb4197ea12a9"`;
+
+exports[`Advanced Mode parse output > Lymphatic_BG_modules.cellml 1`] = `"f4bfabb4aef7a9d4b2d27ce2750e5011cc86acd2"`;
+
+exports[`Advanced Mode parse output > NKE_pump_modules.cellml 1`] = `"bb73033f42fb40540ad9bcb40867a005d9a3086f"`;
+
+exports[`Advanced Mode parse output > base_script.cellml 1`] = `"da39a3ee5e6b4b0d3255bfef95601890afd80709"`;
+
+exports[`Advanced Mode parse output > boundary_condition_modules.cellml 1`] = `"5eac11cb35593ef1bc2d8f0f1feeab903f6a5c0d"`;
+
+exports[`Advanced Mode parse output > cell_modules.cellml 1`] = `"0081e5d37b681802daa860c042c1aa4632eafd00"`;
+
+exports[`Advanced Mode parse output > colon_FTU_modules_new.cellml 1`] = `"b8607aecb6e8425e60f750070fde8f10fef08a01"`;
+
+exports[`Advanced Mode parse output > control_modules.cellml 1`] = `"b99c2cccf155a7deb54298bbb2bf00adbbe52002"`;
+
+exports[`Advanced Mode parse output > coupling_modules.cellml 1`] = `"12e3531edb46e4c2efc2c2013a884e340a3b9f9c"`;
+
+exports[`Advanced Mode parse output > cvs_mvp_modules.cellml 1`] = `"d7cd78f5eed6e6d42ecc68d1339faa0200cf3f8f"`;
+
+exports[`Advanced Mode parse output > delay_modules.cellml 1`] = `"02fc5599d93d20511af9a81146e9dce27c843e90"`;
+
+exports[`Advanced Mode parse output > diffusion_volume_modules.cellml 1`] = `"f413041573cd5db54a85c22535e54c884a0bbfde"`;
+
+exports[`Advanced Mode parse output > elic_modules.cellml 1`] = `"91015bf7056d1b5fe2b3beed9e5e2edea8198681"`;
+
+exports[`Advanced Mode parse output > gas_exchange_modules.cellml 1`] = `"c2dc61d4e64a92113501a6ac91c9352dc936a3df"`;
+
+exports[`Advanced Mode parse output > heart_modules.cellml 1`] = `"8838a8e621abf12f6007aac9c2eb1524581fdf7a"`;
+
+exports[`Advanced Mode parse output > input_stimulation_modules.cellml 1`] = `"ea8892c2955499135ddf100fb222c3e7bd27a98d"`;
+
+exports[`Advanced Mode parse output > ion_channel_modules.cellml 1`] = `"7938a3cd86446652950b572f5f121fa32b116afe"`;
+
+exports[`Advanced Mode parse output > lung_modules.cellml 1`] = `"440a31362e2278727313735e9057ad86815e66dc"`;
+
+exports[`Advanced Mode parse output > metabolism_modules.cellml 1`] = `"5bff3e66d50aaaed7c10c22bbefe2e2c04ef3c02"`;
+
+exports[`Advanced Mode parse output > open_loop_modules.cellml 1`] = `"d9696d7e73e9ddf7ee0ccce23713f4ac63fd6810"`;
+
+exports[`Advanced Mode parse output > parasympathetic_modules.cellml 1`] = `"d192c44a9247dc3bd020bfe9df5187014a6f214a"`;
+
+exports[`Advanced Mode parse output > test_modules.cellml 1`] = `"ab8c3da893b5ae2ce49bdeefc2c09b5ad2ff594e"`;
+
+exports[`Advanced Mode parse output > tutorial_modules.cellml 1`] = `"88e29385f15287446685c5e68cf5a20d88f146c8"`;
+
+exports[`Advanced Mode parse output > user_chemoreceptor_modules.cellml 1`] = `"cae02d20bf1a76d2d063de7002aa436607dd8a5d"`;
+
+exports[`Advanced Mode parse output > vessel_properties_modules.cellml 1`] = `"27e06b596c3efe950e3127d1c3568b6526b83e6f"`;
+
+exports[`Simple Mode parse output > BG_modules.cellml 1`] = `"2b09610c878eaecd94262f85b35bca4c6ca52a64"`;
+
+exports[`Simple Mode parse output > Lymphatic_BG_modules.cellml 1`] = `"ebd00d50a72cb533bcb353c3c4e0d0b1000fa2fc"`;
+
+exports[`Simple Mode parse output > NKE_pump_modules.cellml 1`] = `"789099d55bc4d2004c30334f46768a8356be30d4"`;
+
+exports[`Simple Mode parse output > base_script.cellml 1`] = `"da39a3ee5e6b4b0d3255bfef95601890afd80709"`;
+
+exports[`Simple Mode parse output > boundary_condition_modules.cellml 1`] = `"8beff826c8d4d49c9aab018b1355cf6849033b07"`;
+
+exports[`Simple Mode parse output > cell_modules.cellml 1`] = `"68a735a7c5d80de60245232332ea7adc51f4cf48"`;
+
+exports[`Simple Mode parse output > colon_FTU_modules_new.cellml 1`] = `"02167fabce9aa3533a0096b2ec902c3ae859a517"`;
+
+exports[`Simple Mode parse output > control_modules.cellml 1`] = `"9d47cbdc0abd62fae8cfb1f1e5e513e0e7dbef24"`;
+
+exports[`Simple Mode parse output > coupling_modules.cellml 1`] = `"cb747634de2db45eac1516dfb0df8ba0a553c7d2"`;
+
+exports[`Simple Mode parse output > cvs_mvp_modules.cellml 1`] = `"4a0f744b07d132831ce4cab8348a3deeed101d97"`;
+
+exports[`Simple Mode parse output > delay_modules.cellml 1`] = `"2c9351451ad9a76b22207134587f4fc31814aa4a"`;
+
+exports[`Simple Mode parse output > diffusion_volume_modules.cellml 1`] = `"41319a99a1716ed5ccbdc1a0e6a4ce7510a1b375"`;
+
+exports[`Simple Mode parse output > elic_modules.cellml 1`] = `"f310d3b7831414ff26660f959661ecb321bad866"`;
+
+exports[`Simple Mode parse output > gas_exchange_modules.cellml 1`] = `"edc94fca2a030e66cee648ff16b8064e5cfabbc8"`;
+
+exports[`Simple Mode parse output > heart_modules.cellml 1`] = `"bc757c9f6fa7e11903df2afa91913588938a2000"`;
+
+exports[`Simple Mode parse output > input_stimulation_modules.cellml 1`] = `"daef05239069cd0f498de8e077f779178ef8d87b"`;
+
+exports[`Simple Mode parse output > ion_channel_modules.cellml 1`] = `"eedfe13e7f02cd05c403e9f55bdcacabb3bfa063"`;
+
+exports[`Simple Mode parse output > lung_modules.cellml 1`] = `"93582339be4fb7a4d9e94173eed89c7378755002"`;
+
+exports[`Simple Mode parse output > metabolism_modules.cellml 1`] = `"6c3f5d58ba19b56dc910ac12f6fe08ab0b8b1017"`;
+
+exports[`Simple Mode parse output > open_loop_modules.cellml 1`] = `"83268fe68a8e8964af49bdeef025f04e1fb75848"`;
+
+exports[`Simple Mode parse output > parasympathetic_modules.cellml 1`] = `"872afd7ff1b1d878c15787593bdb4829d556315a"`;
+
+exports[`Simple Mode parse output > test_modules.cellml 1`] = `"901081507fcccc02e004be4d62c8789d419344bc"`;
+
+exports[`Simple Mode parse output > tutorial_modules.cellml 1`] = `"e5f47315a1087c99a20886beaf07285d0f5e2efd"`;
+
+exports[`Simple Mode parse output > user_chemoreceptor_modules.cellml 1`] = `"51de024a136d491c1d683aa9f7692471eef5dcdd"`;
+
+exports[`Simple Mode parse output > vessel_properties_modules.cellml 1`] = `"2f3ac89b46e003763773b030e8a18083cece49bd"`;

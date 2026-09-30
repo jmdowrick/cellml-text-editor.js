@@ -13,12 +13,15 @@ import {
   unknownFunctionMessage,
   type FunctionSpec,
 } from './CellMLMathML'
+import { buildLayout, type LayoutAnchor, type TextLayout } from './CellMLTextLayout'
 
 const INTERFACES = ['public', 'private', 'public_and_private', 'none']
 
 export interface ParserOptions {
   sourceLineAttribute?: string | null
   simplified?: boolean
+  /** Record the text's layout (comments, blank lines, how each statement was written). Default true. */
+  recordLayout?: boolean
 }
 
 export interface ParseContext {
@@ -36,6 +39,8 @@ export interface ParserResult {
   xml: string | null
   errors: ParserError[]
   doc: XMLDocument | null
+  /** What the XML can't hold, to save alongside it (see CellMLTextLayout). Null on error or when not recorded. */
+  layout: TextLayout | null
 }
 
 interface BaseModelInfo {
@@ -52,12 +57,16 @@ export class CellMLTextParser {
   /** Nodes the user wrapped in brackets, which must not be merged into a surrounding chain. */
   private grouped = new WeakSet<Element>()
   private baseCache: { xml: string; info: BaseModelInfo } | null = null
+  /** Where each part of the text is, for the layout. Only ever read from the text, never from the DOM. */
+  private anchors: LayoutAnchor[] = []
+  private recordLayout: boolean
   public simplified: boolean
 
   constructor(options: ParserOptions = {}) {
     this.sourceLineAttr =
       options.sourceLineAttribute === undefined ? 'data-source-location' : options.sourceLineAttribute
     this.simplified = options.simplified ?? false
+    this.recordLayout = options.recordLayout ?? true
   }
 
   /** The XML document built by the most recent parse() call. */
@@ -91,6 +100,8 @@ export class CellMLTextParser {
   public parse(text: string, context: ParseContext = {}): ParserResult {
     this.scanner = new CellMLTextScanner(text)
     this.grouped = new WeakSet()
+    this.anchors = []
+    let componentName = ''
     // DOMParser gives an XML document everywhere; document.implementation.createDocument
     // gives an HTML one under happy-dom.
     this._doc = new DOMParser().parseFromString(`<model xmlns="${CELLML_NS}"/>`, 'application/xml')
@@ -104,7 +115,8 @@ export class CellMLTextParser {
         base.attributes.forEach(([name, value]) => root.setAttribute(name, value))
 
         const comp = this.doc.createElementNS(CELLML_NS, 'component')
-        comp.setAttribute('name', context.componentName || base.componentName || 'component')
+        componentName = context.componentName || base.componentName || 'component'
+        comp.setAttribute('name', componentName)
         root.appendChild(comp)
 
         while (this.scanner.token !== TokenType.EOF) {
@@ -117,7 +129,9 @@ export class CellMLTextParser {
               "Variables are declared in the parameters panel in Simple Mode. Remove the 'var' line, or switch to Advanced Mode.",
             )
           } else if (this.scanner.token === TokenType.Identifier || this.scanner.token === TokenType.KwSel) {
+            const start = this.scanner.tokenStart
             this.parseMathEquation(comp)
+            this.mark('eq', start)
           } else if (this.scanner.token === TokenType.SemiColon) {
             this.scanner.nextToken() // An empty statement loses nothing.
           } else {
@@ -126,6 +140,7 @@ export class CellMLTextParser {
         }
       } else {
         // Standard Advanced Mode parsing
+        const start = this.scanner.tokenStart
         this.expect(TokenType.KwDef)
         this.expect(TokenType.KwModel)
 
@@ -135,6 +150,7 @@ export class CellMLTextParser {
         }
 
         this.expect(TokenType.KwAs)
+        this.mark('model-open', start)
 
         while (this.scanner.token !== TokenType.KwEndDef && this.scanner.token !== TokenType.EOF) {
           if (this.scanner.token === TokenType.KwDef) {
@@ -146,8 +162,10 @@ export class CellMLTextParser {
           }
         }
 
+        const end = this.scanner.tokenStart
         this.expect(TokenType.KwEndDef)
         this.expect(TokenType.SemiColon)
+        this.mark('model-close', end)
       }
 
       context.finalise?.(this._doc)
@@ -156,42 +174,57 @@ export class CellMLTextParser {
         xml: '<?xml version="1.0" encoding="UTF-8"?>\n' + this.serialize(root),
         errors: [],
         doc: this._doc,
+        layout: this.recordLayout ? buildLayout(text, this.anchors, componentName) : null,
       }
     } catch (e: any) {
       return {
         xml: null,
         errors: [{ line: this.scanner.getLine(), message: e.message || 'Unknown parsing error' }],
         doc: null,
+        layout: null,
       }
     }
   }
 
+  /** Records that the text from `start` to the end of the last token read is a `kind`. */
+  private mark(kind: 'model-open' | 'model-close' | 'comp-close' | 'eq' | 'var', start: number): void
+  private mark(kind: 'comp-open' | 'units', start: number, name: string): void
+  private mark(kind: LayoutAnchor['kind'], start: number, name = ''): void {
+    const end = this.scanner.prevTokenEnd
+    this.anchors.push(kind === 'comp-open' || kind === 'units' ? { kind, start, end, name } : { kind, start, end })
+  }
+
   private parseBlock(parent: Element) {
+    const start = this.scanner.tokenStart
     this.expect(TokenType.KwDef) // Consume 'def'
 
     if (this.scanner.token === TokenType.KwComp) {
-      this.parseComponent(parent)
+      this.parseComponent(parent, start)
     } else if (this.scanner.token === TokenType.KwUnit) {
-      this.parseUnit(parent)
+      this.parseUnit(parent, start)
     } else {
       throw new Error("Expected 'comp' or 'unit' after 'def'")
     }
   }
 
-  private parseComponent(parent: Element) {
+  private parseComponent(parent: Element, start: number) {
     this.expect(TokenType.KwComp)
     const name = this.expectIdentifier('component name')
     this.expect(TokenType.KwAs)
+    this.mark('comp-open', start, name)
 
     const comp = this.doc.createElementNS(CELLML_NS, 'component')
     comp.setAttribute('name', name)
     parent.appendChild(comp)
 
     while (this.scanner.token !== TokenType.KwEndDef && this.scanner.token !== TokenType.EOF) {
+      const statementStart = this.scanner.tokenStart
       if (this.scanner.token === TokenType.KwVar) {
         this.parseVariable(comp)
+        this.mark('var', statementStart)
       } else if (this.scanner.token === TokenType.Identifier || this.scanner.token === TokenType.KwSel) {
         this.parseMathEquation(comp)
+        this.mark('eq', statementStart)
       } else if (this.scanner.token === TokenType.SemiColon) {
         this.scanner.nextToken()
       } else {
@@ -199,8 +232,10 @@ export class CellMLTextParser {
       }
     }
 
+    const end = this.scanner.tokenStart
     this.expect(TokenType.KwEndDef)
     this.expect(TokenType.SemiColon)
+    this.mark('comp-close', end)
   }
 
   private parseVariable(parent: Element) {
@@ -261,13 +296,15 @@ export class CellMLTextParser {
     parent.appendChild(variable)
   }
 
-  private parseUnit(parent: Element) {
+  private parseUnit(_parent: Element, start: number) {
     this.expect(TokenType.KwUnit)
+    const name = this.scanner.token === TokenType.Identifier ? this.scanner.value : ''
     while (this.scanner.token !== TokenType.KwEndDef && this.scanner.token !== TokenType.EOF) {
       this.scanner.nextToken()
     }
     this.expect(TokenType.KwEndDef)
     this.expect(TokenType.SemiColon)
+    this.mark('units', start, name)
   }
 
   // --- Math Parsing ---
