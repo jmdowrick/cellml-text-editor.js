@@ -70,6 +70,25 @@ ode(a, t) = 1 {mV_per_s};
     expect(session.text).toBe(TEXT.replace('def comp c as', 'def comp d as'))
   })
 
+  test('renaming a variable everywhere keeps the comments and brackets', () => {
+    const session = loaded()
+    session.setMode({ simple: true })
+    session.setText(session.text.replace('y = (a + b);', 'y = (a + c);'))
+    expect(session.pendingRename).toMatchObject({ from: 'b', to: 'c' })
+
+    session.renameEverywhere()
+    expect(session.text).toBe(`// The sum
+y = (a + c);  // kept brackets
+c = 2 {mV} *
+    a;
+ode(a, t) = 1 {mV_per_s};
+`)
+    session.setMode({ simple: false })
+    expect(session.text).toContain('    var a: mV {init: 1, interface: public};  // membrane\n')
+    expect(session.text).toContain('    var c: mV {interface: public};\n')
+    expect(session.text).toContain('    // The sum\n    y = (a + c);  // kept brackets\n    c = 2 {mV} *\n        a;\n')
+  })
+
   test('text that does not parse keeps the last layout', () => {
     const session = loaded()
     const layout = session.layout
