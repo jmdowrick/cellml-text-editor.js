@@ -201,7 +201,7 @@ export class CellMLTextScanner {
         this.currentToken = TokenType.OpComma
         break
       default:
-        console.warn('Unknown char:', char)
+        // The parser reports the Unknown token as an error, with its line.
         this.currentToken = TokenType.Unknown
       // this.nextToken() // Don't recurse.
     }

@@ -17,6 +17,10 @@
   - Constants default to the declared variables with an initial value. Pass `constants` to decide them yourself.
 - **`isInitialisingKind(kind)`** is true for `constant` and `computed_constant`, the kinds that can be another variable's initial value.
 
+### Fixed
+
+- A character the scanner doesn't recognise (such as `#`) no longer logs `Unknown char` to the console. It is still reported as a parse error.
+
 ### Testing
 
 - The tests run against libcellml.js 0.7.1, the version phlynx ships.
