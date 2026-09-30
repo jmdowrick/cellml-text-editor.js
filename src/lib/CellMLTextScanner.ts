@@ -50,11 +50,11 @@ export enum TokenType {
 export class CellMLTextScanner {
   private input: string
   private pos: number = 0
+  private tokenStart: number = 0
   private line: number = 1
   private length: number
   private currentToken: TokenType = TokenType.EOF
   private currentValue: string = ''
-  private _tokenStart: number = 0
   private _prevTokenEnd: number = 0
 
   constructor(input: string) {
@@ -69,15 +69,14 @@ export class CellMLTextScanner {
   public get value(): string {
     return this.currentValue
   }
-  /** The text being scanned. */
-  public get source(): string {
-    return this.input
+  /** Offset of the current token in the input; it ends where the next one's whitespace begins. */
+  public get start(): number {
+    return this.tokenStart
   }
-  /** Where the current token starts (after any whitespace and comments before it). */
-  public get tokenStart(): number {
-    return this._tokenStart
+  public get end(): number {
+    return this.pos
   }
-  /** Where the previous token ended, so `source.slice(start, prevTokenEnd)` is what was just consumed. */
+  /** Where the previous token ended, so `input.slice(start, prevTokenEnd)` is what was just consumed. */
   public get prevTokenEnd(): number {
     return this._prevTokenEnd
   }
@@ -87,7 +86,7 @@ export class CellMLTextScanner {
     this._prevTokenEnd = this.pos
     const linesSkipped = this.skipWhitespace()
     this.line += linesSkipped
-    this._tokenStart = this.pos
+    this.tokenStart = this.pos
 
     if (this.pos >= this.length) {
       this.currentToken = TokenType.EOF
@@ -208,7 +207,7 @@ export class CellMLTextScanner {
         this.currentToken = TokenType.OpComma
         break
       default:
-        console.warn('Unknown char:', char)
+        // The parser reports the Unknown token as an error, with its line.
         this.currentToken = TokenType.Unknown
       // this.nextToken() // Don't recurse.
     }

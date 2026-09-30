@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.6.0
+## 0.7.0
 
 Comments, blank lines and the way each equation was typed now survive a round trip through CellML. CellML can't hold them, so the parser records them in a **layout**, which is saved beside the model. Passed back to the generator, it gives the text as it was typed.
 
@@ -20,13 +20,13 @@ Comments, blank lines and the way each equation was typed now survive a round tr
 - **`serializeLayout(layout)` and `parseLayout(json)`** save and load a layout as JSON (`"format": "cellml-text-layout"`, `"version": 1`). `parseLayout` returns null for anything else.
 - **`mergeSimpleLayout(previous, simple)`** combines the layout of an edit in Simple Mode, which only shows equations, with the previous layout, so the `var` lines keep their comments and places.
 - **`GeneratorResult.layoutRejected`** is set if a layout would have changed the math and was ignored. This is not expected to happen.
-- **Scanner:** `tokenStart`, `prevTokenEnd` and `source`.
+- **Scanner:** `prevTokenEnd`, where the previous token ended.
 - **Playground:** Open and Save buttons for a model and its `.layout.json`.
 
 ### Guarantees
 
-- **The XML is unchanged.** The parser writes the same XML as 0.5, with or without recording a layout. The tests pin it with snapshots taken before this change.
-- **The default output is unchanged.** Without a layout, the generator writes the same text as 0.5.
+- **The XML is unchanged.** The parser writes the same XML as 0.6, with or without recording a layout. The tests pin it with snapshots taken before this change.
+- **The default output is unchanged.** Without a layout, the generator writes the same text as 0.6.
 - **A layout never changes the math.**
   - A statement's saved text is used only when it parses, on its own, to exactly one statement with the same math.
   - Trivia lines that aren't blank or a comment are ignored.
@@ -45,6 +45,45 @@ Comments, blank lines and the way each equation was typed now survive a round tr
 
 - **Editor highlighting:** `//` comments are highlighted as comments. The editor's grammar had no comment token, so each one showed as a syntax error, even though the parser accepted it.
 - **README:** corrected the Quick Start syntax, and replaced the sections describing a `managed` option and `resolveManagedVariables`, which don't exist.
+
+## 0.6.0
+
+`analyzeModel` reports what each equation defines and uses, and `classifyVariables` works out each variable's kind the way libcellml's Analyser does, even while the model is incomplete.
+
+### Added
+
+- **Equation roles in `ModelAnalysis`.** The new fields are:
+  - `assigned`: the variables on the left of an equation, including an ODE's state.
+  - `voi`: the variables inside a `<bvar>`.
+  - `dependencies`: one entry per equation. `target` is the variable it defines, or `null` for an ODE or an implicit equation. `uses` is every other variable in it.
+
+  The existing fields are unchanged.
+- **`classifyVariables(analysis, { constants? })`** returns each variable's kind: `voi`, `state`, `constant`, `computed_constant`, `algebraic` or `external`. These are the kinds of libcellml's `AnalyserVariable.Type`.
+  - libcellml only answers for a complete, valid model. `classifyVariables` also answers while variables are undeclared, missing initial values or waiting for a connection.
+  - Constants default to the declared variables with an initial value. Pass `constants` to decide them yourself.
+- **`isInitialisingKind(kind)`** is true for `constant` and `computed_constant`, the kinds that can be another variable's initial value.
+
+### Fixed
+
+- A character the scanner doesn't recognise (such as `#`) no longer logs `Unknown char` to the console. It is still reported as a parse error.
+
+### Testing
+
+- The tests run against libcellml.js 0.7.1, the version phlynx ships.
+- `classifyVariables` is checked against libcellml's Analyser on every component in the bundled corpus that libcellml accepts. That is 251 of 260 components, and all of them agree. The cases where the two deliberately differ are listed in `analysis.test.ts`: libcellml rejects the model, or solves a system of equations for a variable that has an initial value.
+
+## 0.5.1
+
+Renaming a variable in Simple Mode keeps its units and initial value.
+
+### Fixed
+
+- **A renamed variable keeps its declaration.** Changing `V` to `Vm` in the equations used to list `Vm` as a new variable with no units or initial value. The session now matches the old and new `<ci>` names, so `Vm` takes over `V`'s units and initial value. This still works when the name is typed a letter at a time, or when an edit briefly fails to parse. A name that is already in use keeps its own units.
+
+### Added
+
+- **Rename everywhere.** When only some uses of a variable are renamed, the new name gets a copy of its units and initial value, and the panel offers to rename the remaining uses. The text is edited in place, so formatting and comments are kept.
+- `detectRenames(before, after)` pairs the variables renamed between two lists of `<ci>` names. `renameIdentifier(text, from, to)` renames a variable in Simple Mode text, leaving function names and units annotations alone. Together they let a host that manages variables itself do the same.
 
 ## 0.5.0
 

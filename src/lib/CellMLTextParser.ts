@@ -129,7 +129,7 @@ export class CellMLTextParser {
               "Variables are declared in the parameters panel in Simple Mode. Remove the 'var' line, or switch to Advanced Mode.",
             )
           } else if (this.scanner.token === TokenType.Identifier || this.scanner.token === TokenType.KwSel) {
-            const start = this.scanner.tokenStart
+            const start = this.scanner.start
             this.parseMathEquation(comp)
             this.mark('eq', start)
           } else if (this.scanner.token === TokenType.SemiColon) {
@@ -140,7 +140,7 @@ export class CellMLTextParser {
         }
       } else {
         // Standard Advanced Mode parsing
-        const start = this.scanner.tokenStart
+        const start = this.scanner.start
         this.expect(TokenType.KwDef)
         this.expect(TokenType.KwModel)
 
@@ -162,7 +162,7 @@ export class CellMLTextParser {
           }
         }
 
-        const end = this.scanner.tokenStart
+        const end = this.scanner.start
         this.expect(TokenType.KwEndDef)
         this.expect(TokenType.SemiColon)
         this.mark('model-close', end)
@@ -195,7 +195,7 @@ export class CellMLTextParser {
   }
 
   private parseBlock(parent: Element) {
-    const start = this.scanner.tokenStart
+    const start = this.scanner.start
     this.expect(TokenType.KwDef) // Consume 'def'
 
     if (this.scanner.token === TokenType.KwComp) {
@@ -218,7 +218,7 @@ export class CellMLTextParser {
     parent.appendChild(comp)
 
     while (this.scanner.token !== TokenType.KwEndDef && this.scanner.token !== TokenType.EOF) {
-      const statementStart = this.scanner.tokenStart
+      const statementStart = this.scanner.start
       if (this.scanner.token === TokenType.KwVar) {
         this.parseVariable(comp)
         this.mark('var', statementStart)
@@ -232,7 +232,7 @@ export class CellMLTextParser {
       }
     }
 
-    const end = this.scanner.tokenStart
+    const end = this.scanner.start
     this.expect(TokenType.KwEndDef)
     this.expect(TokenType.SemiColon)
     this.mark('comp-close', end)

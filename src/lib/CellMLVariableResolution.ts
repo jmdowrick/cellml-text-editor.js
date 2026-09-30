@@ -34,6 +34,20 @@ export interface ModelAnalysis {
   stateVariables: string[]
   /** Variables used in the math that have no declared units. */
   unresolved: string[]
+  /** Variables on the left-hand side of an equation, outside any `<bvar>`. For an ODE this is the state. */
+  assigned: string[]
+  /** Variables inside a `<bvar>` (the variable of integration). */
+  voi: string[]
+  /** One entry per equation, in document order. */
+  dependencies: EquationDependency[]
+}
+
+/** What one equation defines, and every variable it uses. */
+export interface EquationDependency {
+  /** The variable the equation defines: its left-hand side when that is a lone `<ci>`, else null (an ODE or an implicit equation). */
+  target: string | null
+  /** Every other variable in the equation, bvars included, in order of first appearance. */
+  uses: string[]
 }
 
 function firstComponent(doc: XMLDocument | Document): Element | undefined {
@@ -45,7 +59,16 @@ function firstComponent(doc: XMLDocument | Document): Element | undefined {
 export function analyzeModel(doc: XMLDocument | Document): ModelAnalysis {
   const component = firstComponent(doc)
   if (!component) {
-    return { componentName: '', declared: [], referenced: [], stateVariables: [], unresolved: [] }
+    return {
+      componentName: '',
+      declared: [],
+      referenced: [],
+      stateVariables: [],
+      unresolved: [],
+      assigned: [],
+      voi: [],
+      dependencies: [],
+    }
   }
 
   const declared: DeclaredVariable[] = []
@@ -65,9 +88,13 @@ export function analyzeModel(doc: XMLDocument | Document): ModelAnalysis {
 
   const referenced = new Set<string>()
   const stateVariables = new Set<string>()
+  const assigned = new Set<string>()
+  const voi = new Set<string>()
+  const dependencies: EquationDependency[] = []
   const maths = component.getElementsByTagNameNS(MATHML_NS, 'math')
   for (let i = 0; i < maths.length; i++) {
     collectFromMath(maths[i], referenced, stateVariables)
+    collectEquations(maths[i], assigned, voi, dependencies)
   }
 
   return {
@@ -76,6 +103,9 @@ export function analyzeModel(doc: XMLDocument | Document): ModelAnalysis {
     referenced: Array.from(referenced),
     stateVariables: Array.from(stateVariables),
     unresolved: Array.from(referenced).filter((name) => !declaredUnits.get(name)),
+    assigned: Array.from(assigned),
+    voi: Array.from(voi),
+    dependencies,
   }
 }
 
@@ -86,12 +116,26 @@ export function analyzeModelXml(xml: string): ModelAnalysis | null {
   return analyzeModel(doc)
 }
 
+/** Every `<ci>` name in the component's math, in document order and with repeats. */
+export function referenceSequence(doc: XMLDocument | Document): string[] {
+  const component = firstComponent(doc)
+  if (!component) return []
+
+  const names: string[] = []
+  for (const math of Array.from(component.getElementsByTagNameNS(MATHML_NS, 'math'))) {
+    for (const ci of Array.from(math.getElementsByTagNameNS(MATHML_NS, 'ci'))) {
+      const name = ciName(ci)
+      if (name) names.push(name)
+    }
+  }
+  return names
+}
+
 function collectFromMath(math: Element | null | undefined, referenced: Set<string>, stateVariables: Set<string>) {
   if (!math) return
 
-  const cis = math.getElementsByTagNameNS(MATHML_NS, 'ci')
-  for (let i = 0; i < cis.length; i++) {
-    const name = cis[i]?.textContent?.trim()
+  for (const ci of Array.from(math.getElementsByTagNameNS(MATHML_NS, 'ci'))) {
+    const name = ciName(ci)
     if (name) referenced.add(name)
   }
 
@@ -102,9 +146,55 @@ function collectFromMath(math: Element | null | undefined, referenced: Set<strin
 
     // <apply><diff/><bvar><ci>t</ci></bvar><ci>V</ci></apply> -> dependent is "V"
     const dependent = Array.from(apply.children).find((c) => c.localName !== 'diff' && c.localName !== 'bvar')
-    const name = dependent?.localName === 'ci' ? dependent.textContent?.trim() : undefined
+    const name = dependent?.localName === 'ci' ? ciName(dependent) : undefined
     if (name) stateVariables.add(name)
   }
+}
+
+function collectEquations(
+  math: Element | null | undefined,
+  assigned: Set<string>,
+  voi: Set<string>,
+  dependencies: EquationDependency[],
+) {
+  if (!math) return
+
+  for (const ci of Array.from(math.getElementsByTagNameNS(MATHML_NS, 'ci'))) {
+    const name = ciName(ci)
+    if (name && insideBvar(ci, math)) voi.add(name)
+  }
+
+  for (const equation of Array.from(math.children)) {
+    if (equation.localName !== 'apply' || equation.firstElementChild?.localName !== 'eq') continue
+    const lhs = equation.children[1]
+    if (!lhs) continue
+
+    for (const ci of lhs.localName === 'ci' ? [lhs] : Array.from(lhs.getElementsByTagNameNS(MATHML_NS, 'ci'))) {
+      const name = ciName(ci)
+      if (name && !insideBvar(ci, equation)) assigned.add(name)
+    }
+
+    // The defining <ci> itself is left out of `uses`, but not other uses of its name: in "a = a + 1", `a` uses `a`.
+    const target = lhs.localName === 'ci' ? lhs : undefined
+    const uses = new Set<string>()
+    for (const ci of Array.from(equation.getElementsByTagNameNS(MATHML_NS, 'ci'))) {
+      const name = ciName(ci)
+      if (name && ci !== target) uses.add(name)
+    }
+    dependencies.push({ target: target ? ciName(target) || null : null, uses: Array.from(uses) })
+  }
+}
+
+/** Whether `el` is inside a `<bvar>`, looking no further up than `root`. */
+function insideBvar(el: Element, root: Element): boolean {
+  for (let node = el.parentElement; node && node !== root; node = node.parentElement) {
+    if (node.localName === 'bvar') return true
+  }
+  return false
+}
+
+function ciName(ci: Element): string {
+  return ci.textContent?.trim() ?? ''
 }
 
 // --- Applying definitions -------------------------------------------------

@@ -90,6 +90,17 @@
           <div class="resolution-status" :class="{ 'is-complete': isComplete }">
             {{ isComplete ? 'All referenced variables have units.' : `${missingCount} variable(s) still need units.` }}
           </div>
+          <div v-if="pendingRename" class="rename-notice">
+            <p>
+              <code>{{ pendingRename.from }}</code> → <code>{{ pendingRename.to }}</code> here.
+              <code>{{ pendingRename.from }}</code> is still used
+              {{ pendingRename.uses === 1 ? 'once more' : `${pendingRename.uses} more times` }}.
+            </p>
+            <div class="rename-actions">
+              <button type="button" class="button-primary" @click="session.renameEverywhere()">Rename everywhere</button>
+              <button type="button" class="button-secondary" @click="session.dismissRename()">Keep both</button>
+            </div>
+          </div>
         </div>
 
         <div class="variable-list">
@@ -331,6 +342,7 @@ const missingCount = snapshot(() => session.missing.length)
 const editable = snapshot(() => session.editable)
 const modelName = snapshot(() => session.modelName)
 const componentName = snapshot(() => session.componentName)
+const pendingRename = snapshot(() => session.pendingRename)
 
 const valueOf = (e: Event) => (e.target as HTMLInputElement).value
 
@@ -869,6 +881,59 @@ onMounted(async () => {
 .resolution-status.is-complete {
   background: var(--color-success-bg);
   color: var(--color-success-fg);
+}
+
+.rename-notice {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: var(--color-init-bg);
+  border-radius: 4px;
+  color: var(--color-init-fg);
+  font-size: 0.75rem;
+}
+
+.rename-notice p {
+  margin: 0 0 8px;
+}
+
+.rename-notice code {
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.rename-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.rename-actions button {
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.button-primary {
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
+  color: #fff;
+}
+
+.button-primary:hover {
+  background: var(--color-accent-hover);
+}
+
+.button-secondary {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-text);
+}
+
+.rename-actions button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 /* --- XML output --- */

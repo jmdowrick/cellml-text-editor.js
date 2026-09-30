@@ -4,20 +4,20 @@ import { createRequire } from 'node:module'
 import createLibCellML from 'libcellml.js'
 
 import { CELLML_MATHML_ELEMENTS, CELLML_NS, MATHML_NS } from '../../CellMLMathML'
+import type { VariableKind } from '../../CellMLVariableClassification'
 import { unitsOf } from './mathml'
 
 let instance: Promise<any> | null = null
 
 /**
- * libcellml, loaded once per test file. The wasm is instantiated here, so
- * Emscripten never tries to fetch it: under jsdom it sees a `window` and may
- * think it is in a browser.
+ * libcellml, loaded once per test file. The wasm is instantiated here so Emscripten never tries to fetch it
+ * (0.7 ignores `wasmBinary`, and happy-dom's `window` makes it think it is in a browser).
  */
 export function libcellml(): Promise<any> {
-  const wasm = createRequire(import.meta.url).resolve('libcellml.js/libcellml.wasm')
+  const wasm = fs.readFileSync(createRequire(import.meta.url).resolve('libcellml.js/libcellml.wasm'))
   instance ??= createLibCellML({
-    instantiateWasm(imports, receive) {
-      WebAssembly.instantiate(fs.readFileSync(wasm), imports).then(({ instance }) => receive(instance))
+    instantiateWasm(imports: WebAssembly.Imports, done: (instance: WebAssembly.Instance, module: WebAssembly.Module) => void) {
+      WebAssembly.instantiate(wasm, imports).then(({ instance, module }) => done(instance, module))
       return {}
     },
   })
@@ -103,4 +103,68 @@ export async function mathIssues(xml: string): Promise<string[]> {
     validator.delete()
   }
   return issues
+}
+
+const NUMERIC_LITERAL = /^-?[\d.]+([eE][+-]?\d+)?$/
+
+const ANALYSER_KINDS: Record<string, VariableKind> = {
+  VARIABLE_OF_INTEGRATION: 'voi',
+  STATE: 'state',
+  CONSTANT: 'constant',
+  COMPUTED_CONSTANT: 'computed_constant',
+  ALGEBRAIC_VARIABLE: 'algebraic',
+  EXTERNAL_VARIABLE: 'external',
+}
+
+/**
+ * libcellml's Analyser's kind for each variable of the first component, or null when the Analyser rejects the model.
+ * `externals` are the variables to treat as inputs from elsewhere.
+ *
+ * Units and variable initial values are made self-contained first (every unit dimensionless, every initial value a
+ * number), since a component taken out of its library refers to units and parameters that aren't there. Neither
+ * changes how a variable is classified.
+ */
+export async function analyserKinds(xml: string, externals: Iterable<string>): Promise<Map<string, VariableKind> | null> {
+  const lib = await libcellml()
+  const parser = new lib.Parser(false)
+  const analyser = new lib.Analyser()
+  const model = parser.parseModel(xml)
+  // Every getter returns a new handle that must be deleted, or Embind reports it as leaked.
+  const handles: any[] = []
+  const own = <T>(handle: T): T => {
+    if (handle) handles.push(handle)
+    return handle
+  }
+  try {
+    const component = own(model.componentByIndex(0))
+    if (!component) return null
+    for (let i = 0; i < component.variableCount(); i++) {
+      const variable = own(component.variableByIndex(i))
+      variable.setUnitsByName('dimensionless')
+      if (variable.initialValue() && !NUMERIC_LITERAL.test(variable.initialValue())) variable.setInitialValueByString('0')
+    }
+    component.setMath(component.math().replace(/(cellml:units=)"[^"]*"/g, '$1"dimensionless"'))
+
+    for (const name of externals) {
+      const variable = own(component.variableByName(name))
+      if (variable) analyser.addExternalVariableByVariable(variable)
+    }
+    analyser.analyseModel(model)
+    const analysed = own(analyser.analyserModel())
+    if (!analysed.isValid()) return null
+
+    const typeNames = new Map(Object.entries(lib.AnalyserVariable.Type).map(([key, value]) => [value, key]))
+    const kinds = new Map<string, VariableKind>()
+    for (let i = 0; i < component.variableCount(); i++) {
+      const variable = own(component.variableByIndex(i))
+      const kind = ANALYSER_KINDS[typeNames.get(own(analysed.analyserVariable(variable))?.type()) as string]
+      if (kind) kinds.set(variable.name(), kind)
+    }
+    return kinds
+  } finally {
+    for (const handle of handles.reverse()) handle.delete()
+    model.delete()
+    parser.delete()
+    analyser.delete()
+  }
 }
