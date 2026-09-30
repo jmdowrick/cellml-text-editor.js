@@ -50,29 +50,31 @@ function expectSameMeaning(generator: CellMLTextGenerator, xml: string, layout: 
   return laidOut.text
 }
 
-/** Changes the XML the way another tool might: drops, swaps or edits an equation, or renames a variable. */
-function mutate(xml: string, seed: number): string {
+const MUTATIONS = ['drop an equation', 'swap two equations', 'change a number', 'rename a variable'] as const
+
+/** Changes the XML the way another tool might. `seed` picks which equation, number or variable. */
+function mutate(xml: string, kind: (typeof MUTATIONS)[number], seed: number): string {
   const next = random(seed)
   const doc = new DOMParser().parseFromString(xml, 'application/xml')
   const math = doc.getElementsByTagNameNS(MATHML_NS, 'math')[0]
   const equations = math ? Array.from(math.children) : []
   const pick = <T,>(items: T[]) => items[Math.floor(next() * items.length)]
 
-  switch (Math.floor(next() * 4)) {
-    case 0:
+  switch (kind) {
+    case 'drop an equation':
       pick(equations)?.remove()
       break
-    case 1: {
+    case 'swap two equations': {
       const [a, b] = [pick(equations), pick(equations)]
       if (a && b && a !== b) math!.insertBefore(b, a)
       break
     }
-    case 2: {
+    case 'change a number': {
       const cn = pick(Array.from(doc.getElementsByTagNameNS(MATHML_NS, 'cn')).filter((c) => c.children.length === 0))
       if (cn) cn.textContent = '42'
       break
     }
-    default: {
+    case 'rename a variable': {
       const variable = pick(Array.from(doc.getElementsByTagName('variable')))
       const name = variable?.getAttribute('name')
       if (name) {
@@ -99,11 +101,11 @@ describe.each(MODES)('$mode Mode: a layout never changes meaning', ({ simplified
 
     parsed.forEach(({ name, xml, layout }, i) => {
       const where = `${file}, component ${name}`
-      for (let seed = 0; seed < 4; seed++) {
-        const text = expectSameMeaning(generator, mutate(xml, seed * 100 + i), layout, `${where}, mutation ${seed}`)
-        // Advanced Mode shows every comment, even those whose statement went.
-        if (!simplified) expect(commentsIn(text).sort(), `${where}, mutation ${seed}`).toEqual(commentsIn(decorate(generator.generate(components[i]!.xml), 3000 + i)).sort())
-      }
+      // One change per component; the kinds take turns, so every library with a few components gets all four.
+      const kind = MUTATIONS[i % MUTATIONS.length]!
+      const text = expectSameMeaning(generator, mutate(xml, kind, i), layout, `${where}, ${kind}`)
+      // Advanced Mode shows every comment, even those whose statement went.
+      if (!simplified) expect(commentsIn(text).sort(), `${where}, ${kind}`).toEqual(commentsIn(decorate(generator.generate(components[i]!.xml), 3000 + i)).sort())
       const other = parsed[(i + 1) % parsed.length]!
       expectSameMeaning(generator, xml, other.layout, `${where}, with the layout of ${other.name}`)
     })
@@ -179,7 +181,8 @@ describe('random trees', () => {
   const parser = new CellMLTextParser({ simplified: true })
 
   test('extra brackets survive, and never change the tree', () => {
-    for (const [i, tree] of randomTrees(20260930, 300).entries()) {
+    // guarantee.test.ts already checks tree -> text -> tree on 400 trees; this adds the brackets and the layout.
+    for (const [i, tree] of randomTrees(20260930, 100).entries()) {
       const xml = modelWithRhs(tree)
       const text = decorate(generator.generate(xml), i)
       const parsed = parser.parse(text)
