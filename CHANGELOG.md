@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.1
+
+### Added
+
+- **`applyVariableDefinitions(doc, definitions, { keep })`** declares the `keep` names even when no equation uses them, so a host can rebuild Simple Mode XML without losing parameters it still holds values for.
+  - Each kept name is declared from its definition, or left as it is when the document already declares it. One with neither is skipped.
+  - A kept name brings the variable its initial value names, as a used name does.
+  - Names are never declared twice.
+- **`ApplyDefinitionsOptions`** type.
+
 ## 0.7.0
 
 Comments, blank lines and the way each equation was typed now survive a round trip through CellML. CellML can't hold them, so the parser records them in a **layout**, which is saved beside the model. Passed back to the generator, it gives the text as it was typed.
