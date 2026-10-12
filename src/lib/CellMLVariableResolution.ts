@@ -199,7 +199,23 @@ function ciName(ci: Element): string {
 
 // --- Applying definitions -------------------------------------------------
 
-export function applyVariableDefinitions(doc: XMLDocument | Document, definitions: VariableDefinition[]): void {
+export interface ApplyDefinitionsOptions {
+  /**
+   * Names to declare even when no equation uses them (e.g. parameters the host keeps values for).
+   * Each needs a definition or an existing declaration; one with neither is skipped.
+   */
+  keep?: Iterable<string>
+}
+
+/**
+ * Declares, from `definitions`, every variable the component's math uses, the initial-value
+ * variables those refer to, and any `keep` names. Existing declarations are updated, not duplicated.
+ */
+export function applyVariableDefinitions(
+  doc: XMLDocument | Document,
+  definitions: VariableDefinition[],
+  { keep = [] }: ApplyDefinitionsOptions = {},
+): void {
   const component = firstComponent(doc)
   if (!component) return
 
@@ -209,7 +225,7 @@ export function applyVariableDefinitions(doc: XMLDocument | Document, definition
     Array.from(component.getElementsByTagName('variable')).map((v) => [v.getAttribute('name') ?? '', v]),
   )
 
-  const queue = analyzeModel(doc).referenced
+  const queue = [...analyzeModel(doc).referenced, ...keep]
   const seen = new Set<string>()
 
   while (queue.length > 0) {

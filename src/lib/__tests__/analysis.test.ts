@@ -103,6 +103,78 @@ describe('analyzeModel: assigned, voi and dependencies', () => {
   })
 })
 
+describe('applyVariableDefinitions: keep', () => {
+  const BASE = '<model xmlns="http://www.cellml.org/cellml/2.0#" name="m"/>'
+  const parse = (text: string) => parser.parse(text, { baseXml: BASE }).doc!
+  const declared = (doc: XMLDocument) => analyzeModel(doc).declared
+
+  const definitions = [
+    { name: 'y', units: 'mV' },
+    { name: 'a', units: 'dimensionless' },
+    { name: 'N_avo', units: 'per_mol', interface: 'public' as const, initialValue: '6.022e23' },
+    { name: 'cAMP', units: 'mM', initialValue: 'cAMP_init' },
+    { name: 'cAMP_init', units: 'mM', initialValue: '0.1' },
+  ]
+
+  test('without keep, only names the math uses are declared', () => {
+    const doc = parse('y = a;')
+    applyVariableDefinitions(doc, definitions)
+    expect(declared(doc).map((d) => d.name)).toEqual(['y', 'a'])
+  })
+
+  test('kept names are declared from their definitions, after the used ones', () => {
+    const doc = parse('y = a;')
+    applyVariableDefinitions(doc, definitions, { keep: ['N_avo'] })
+    expect(declared(doc)).toEqual([
+      { name: 'y', units: 'mV', interface: '', initialValue: '' },
+      { name: 'a', units: 'dimensionless', interface: '', initialValue: '' },
+      { name: 'N_avo', units: 'per_mol', interface: 'public', initialValue: '6.022e23' },
+    ])
+  })
+
+  test('a kept name brings the variable its initial value names', () => {
+    const doc = parse('y = a;')
+    applyVariableDefinitions(doc, definitions, { keep: new Set(['cAMP']) })
+    expect(declared(doc).map((d) => d.name)).toEqual(['y', 'a', 'cAMP', 'cAMP_init'])
+  })
+
+  test('a kept name the math also uses, or listed twice, is declared once', () => {
+    const doc = parse('y = a;')
+    applyVariableDefinitions(doc, definitions, { keep: ['a', 'N_avo', 'N_avo'] })
+    expect(declared(doc).map((d) => d.name)).toEqual(['y', 'a', 'N_avo'])
+  })
+
+  test('a kept name with no definition is skipped', () => {
+    const doc = parse('y = a;')
+    applyVariableDefinitions(doc, definitions, { keep: ['nowhere'] })
+    expect(declared(doc).map((d) => d.name)).toEqual(['y', 'a'])
+  })
+
+  test('an existing declaration is kept, and updated rather than duplicated', () => {
+    const doc = new DOMParser().parseFromString(
+      `<model xmlns="http://www.cellml.org/cellml/2.0#" name="m"><component name="c">
+        <variable name="N_avo" units="dimensionless" interface="public_and_private"/>
+        <variable name="extra" units="mM" interface="public"/>
+      </component></model>`,
+      'application/xml',
+    ) as XMLDocument
+    applyVariableDefinitions(doc, definitions, { keep: ['N_avo', 'extra'] })
+    expect(declared(doc)).toEqual([
+      { name: 'N_avo', units: 'per_mol', interface: 'public', initialValue: '6.022e23' },
+      { name: 'extra', units: 'mM', interface: 'public', initialValue: '' },
+    ])
+  })
+
+  test('kept declarations precede the math', () => {
+    const doc = parse('y = a;')
+    applyVariableDefinitions(doc, definitions, { keep: ['N_avo'] })
+    const names = Array.from(doc.getElementsByTagName('component')[0]!.children).map(
+      (el) => el.getAttribute('name') ?? el.localName,
+    )
+    expect(names).toEqual(['y', 'a', 'N_avo', 'math'])
+  })
+})
+
 describe('classifyVariables', () => {
   test('a declared variable with an initial value is a constant', () => {
     expect(classify('y = k*t;', { k: '3' }).k).toBe('constant')

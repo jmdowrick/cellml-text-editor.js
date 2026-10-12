@@ -31,6 +31,7 @@ export type {
   UnitsLayout,
 } from './lib/CellMLTextLayout'
 export type {
+  ApplyDefinitionsOptions,
   DeclaredVariable,
   EquationDependency,
   ModelAnalysis,
